@@ -145,6 +145,13 @@ def main():
 			});
 		}));
 	});
+	const auto acct = AddButtonWithLabel(
+		container,
+		rpl::single(Tgx::AccountTitle()),
+		Tgx::AccountStatusValue(),
+		st::settingsButton,
+		{ &st::menuIconNetwork });
+	acct->addClickHandler([] { Tgx::AccountClicked(); });
 	const auto apps = AddButtonWithLabel(
 		container,
 		rpl::single(Tgx::AppsTitle()),

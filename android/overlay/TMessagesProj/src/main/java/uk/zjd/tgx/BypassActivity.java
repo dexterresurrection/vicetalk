@@ -5,6 +5,8 @@
 package uk.zjd.tgx;
 
 import android.content.Context;
+import android.content.Intent;
+import android.net.Uri;
 import android.graphics.Typeface;
 import android.util.TypedValue;
 import android.view.Gravity;
@@ -28,6 +30,12 @@ import org.telegram.ui.ActionBar.Theme;
 public class BypassActivity extends BaseFragment {
     private TextView status;
     private TextView logView;
+    private TextView account;
+    private Button accountButton;
+    private Button refreshButton;
+    private LinearLayout codeBox;
+    private TextView codeText;
+    private String verificationUrl, telegramUrl;
     private final Runnable refresh = new Runnable() {
         @Override
         public void run() {
@@ -64,6 +72,43 @@ public class BypassActivity extends BaseFragment {
                         + "Через обход идёт только трафик этого приложения — другие приложения и браузер не затрагиваются.",
                 "When Telegram is slow or blocked on your network, " + Brand.name + " routes messages, files and calls through CloudVPN servers. "
                         + "Only this app's traffic goes through the bypass."), 15, fg));
+
+        // ---- CloudVPN account: the bypass is part of the subscription
+        account = text(context, "", 15, fg);
+        account.setPadding(0, AndroidUtilities.dp(14), 0, AndroidUtilities.dp(4));
+        box.addView(account);
+        accountButton = new Button(context);
+        accountButton.setOnClickListener(v -> onAccountButton());
+        box.addView(accountButton, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        codeBox = new LinearLayout(context);
+        codeBox.setOrientation(LinearLayout.VERTICAL);
+        codeBox.setVisibility(View.GONE);
+        codeText = text(context, "", 15, fg);
+        codeText.setPadding(0, AndroidUtilities.dp(8), 0, AndroidUtilities.dp(8));
+        codeBox.addView(codeText);
+        final Button openCabinet = new Button(context);
+        openCabinet.setText(Brand.t("Открыть кабинет и подтвердить", "Open the cabinet and confirm"));
+        openCabinet.setOnClickListener(v -> open(verificationUrl));
+        codeBox.addView(openCabinet, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        final Button viaBot = new Button(context);
+        viaBot.setText(Brand.t("Подтвердить через бота", "Confirm in the bot"));
+        viaBot.setOnClickListener(v -> open(telegramUrl));
+        codeBox.addView(viaBot, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        box.addView(codeBox);
+        refreshButton = new Button(context);
+        refreshButton.setText(Brand.t("Обновить серверы обхода", "Refresh bypass servers"));
+        refreshButton.setOnClickListener(v -> {
+            refreshButton.setEnabled(false);
+            new Thread(() -> {
+                final String err = Account.fetchProfile(getContext());
+                AndroidUtilities.runOnUIThread(() -> {
+                    refreshButton.setEnabled(true);
+                    refreshButton.setText(err == null ? Brand.t("Серверы обновлены", "Servers refreshed") : err);
+                    update();
+                });
+            }).start();
+        });
+        box.addView(refreshButton, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
 
         final RadioGroup group = new RadioGroup(context);
         group.setPadding(0, AndroidUtilities.dp(12), 0, AndroidUtilities.dp(8));
@@ -125,6 +170,48 @@ public class BypassActivity extends BaseFragment {
         return fragmentView;
     }
 
+    private void open(String url) {
+        if (url == null || url.isEmpty()) {
+            return;
+        }
+        try {
+            getParentActivity().startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
+        } catch (Throwable ignore) {
+        }
+    }
+
+    private void onAccountButton() {
+        final Context c = getContext();
+        if (Account.loggedIn(c)) {
+            Account.logout(c);
+            update();
+            return;
+        }
+        accountButton.setEnabled(false);
+        Account.startLogin(c, new Account.LoginListener() {
+            @Override
+            public void onCode(String userCode, String vUrl, String tgUrl) {
+                verificationUrl = vUrl;
+                telegramUrl = tgUrl;
+                codeText.setText(Brand.t("Код для входа: ", "Sign-in code: ") + userCode + "\n"
+                        + Brand.t("Подтвердите его в кабинете CloudVPN (или в боте, если Telegram уже работает). Жду подтверждения…",
+                        "Confirm it in the CloudVPN cabinet (or in the bot if Telegram already works). Waiting…"));
+                codeBox.setVisibility(View.VISIBLE);
+            }
+
+            @Override
+            public void onDone(boolean ok, String error) {
+                codeBox.setVisibility(View.GONE);
+                accountButton.setEnabled(true);
+                if (!ok && error != null) {
+                    codeText.setText(error);
+                    codeBox.setVisibility(View.VISIBLE);
+                }
+                update();
+            }
+        });
+    }
+
     private static TextView text(Context c, String s, int sp, int color) {
         final TextView t = new TextView(c);
         t.setText(s);
@@ -138,6 +225,13 @@ public class BypassActivity extends BaseFragment {
         if (status == null) {
             return;
         }
+        final boolean in = Account.loggedIn(getContext());
+        final String who = Account.userName(getContext());
+        account.setText(in ? Brand.t("Аккаунт CloudVPN: ", "CloudVPN account: ") + (who.isEmpty() ? Brand.t("вход выполнен", "signed in") : who)
+                : Brand.t("Обход входит в подписку CloudVPN. Войдите в аккаунт — серверы обхода возьмутся из вашей подписки.",
+                "The bypass is part of the CloudVPN subscription. Sign in — the bypass servers come from your subscription."));
+        accountButton.setText(in ? Brand.t("Выйти из аккаунта", "Sign out") : Brand.t("Войти через CloudVPN", "Sign in with CloudVPN"));
+        refreshButton.setVisibility(in ? View.VISIBLE : View.GONE);
         final int st = ConnectionsManager.getInstance(UserConfig.selectedAccount).getConnectionState();
         final String conn;
         switch (st) {
@@ -178,5 +272,11 @@ public class BypassActivity extends BaseFragment {
     public void onPause() {
         super.onPause();
         AndroidUtilities.cancelRunOnUIThread(refresh);
+    }
+
+    @Override
+    public void onFragmentDestroy() {
+        Account.cancelLogin();
+        super.onFragmentDestroy();
     }
 }

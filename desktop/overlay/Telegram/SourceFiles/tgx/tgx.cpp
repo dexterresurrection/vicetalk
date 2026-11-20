@@ -108,6 +108,10 @@ public:
 		return _status.value();
 	}
 	void stopXray();
+	void profilesUpdated();
+	void notifyStatus() {
+		updateStatus();
+	}
 
 private:
 	Bypass() = default;
@@ -293,6 +297,20 @@ bool Bypass::ourMtproto(const MTP::ProxyData &proxy) const {
 bool Bypass::userProxyInUse() const {
 	const auto &proxy = Core::App().settings().proxy();
 	return proxy.isEnabled() && !ourProxyCurrent() && !ourMtproto(proxy.selected());
+}
+
+void Bypass::profilesUpdated() {
+	_state.remove(u"mtproto_added"_q);
+	addMtprotoFallbacks();
+	if (_active) {
+		stopXray();
+		if (startXray()) {
+			useTelegramProxy(localProxy());
+		}
+	} else if (_mode == BypassMode::Always) {
+		enable(u"profiles arrived"_q);
+	}
+	updateStatus();
 }
 
 void Bypass::addMtprotoFallbacks() {
@@ -547,6 +565,191 @@ void Bypass::updateStatus() {
 		: T("сейчас напрямую", "now direct"));
 }
 
+
+// ---------------------------------------------------------------- CloudVPN account (the bypass is part of the subscription)
+
+const QStringList kOrigins = { u"https://cabinet.zjd.uk"_q, u"https://cabinet.0nn.us"_q };
+
+class Account final : public QObject {
+public:
+	static Account &Instance() {
+		static auto result = new Account();
+		return *result;
+	}
+	bool loggedIn() const {
+		return !_refresh.isEmpty();
+	}
+	QString name() const {
+		return _name;
+	}
+	rpl::producer<QString> statusValue() const {
+		return _status.value();
+	}
+	void load() {
+		const auto o = ReadJson(StateDir() + u"account.json"_q);
+		_refresh = o.value(u"refresh"_q).toString();
+		_name = o.value(u"name"_q).toString();
+		updateStatus();
+		_timer.setCallback([=] { fetchProfile(nullptr); });
+		_timer.callEach(6 * 3600 * 1000);
+		if (loggedIn()) {
+			fetchProfile(nullptr);
+		}
+	}
+	void logout() {
+		_refresh = _access = _name = QString();
+		QFile::remove(StateDir() + u"account.json"_q);
+		QFile::remove(StateDir() + u"profiles.json"_q);
+		Bypass::Instance().profilesUpdated();
+		updateStatus();
+	}
+	void startLogin(Fn<void(QString code, QString url)> onCode, Fn<void(bool ok, QString error)> onDone) {
+		_polling = true;
+		request(u"POST"_q, u"/cabinet/auth/device/request"_q, QByteArray("{}"), QString(), [=](int code, QByteArray body) {
+			const auto d = QJsonDocument::fromJson(body).object();
+			if (code != 200 || d.value(u"token"_q).toString().isEmpty()) {
+				onDone(false, T("Кабинет не отвечает", "The cabinet does not answer"));
+				return;
+			}
+			onCode(d.value(u"user_code"_q).toString(), d.value(u"verification_url"_q).toString());
+			poll(d.value(u"token"_q).toString(), crl::now() + d.value(u"expires_in"_q).toInt(600) * crl::time(1000), onDone);
+		});
+	}
+	void cancelLogin() {
+		_polling = false;
+	}
+	void fetchProfile(Fn<void(QString error)> done) {
+		withAccess([=](QString access) {
+			if (access.isEmpty()) {
+				if (done) done(T("Войдите в аккаунт CloudVPN", "Sign in to your CloudVPN account"));
+				return;
+			}
+			request(u"GET"_q, u"/cabinet/app/talk-profile"_q, QByteArray(), access, [=](int code, QByteArray body) {
+				auto error = QString();
+				if (code == 200 && QJsonDocument::fromJson(body).object().contains(u"xray"_q)) {
+					auto f = QFile(StateDir() + u"profiles.json"_q);
+					if (f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+						f.write(body);
+						f.close();
+					}
+					LOG(("Tgx: profiles from the account: %1 xray").arg(QJsonDocument::fromJson(body).object().value(u"xray"_q).toArray().size()));
+					Bypass::Instance().profilesUpdated();
+				} else {
+					const auto e = QJsonDocument::fromJson(body).object().value(u"error"_q).toString();
+					error = (e == u"no_device"_q)
+						? T("Сначала подключите Cloud VPN на любом устройстве — обход берёт серверы вашей подписки", "Connect Cloud VPN on any device first")
+						: (e == u"subscription_inactive"_q || e == u"no_subscription"_q)
+						? T("Подписка CloudVPN не активна — обход входит в подписку", "Your CloudVPN subscription is not active")
+						: T("Кабинет ответил ", "The cabinet answered ") + QString::number(code);
+					LOG(("Tgx: profiles: %1").arg(error));
+				}
+				updateStatus();
+				if (done) done(error);
+			});
+		});
+	}
+
+private:
+	Account() = default;
+
+	void save() {
+		WriteJson(StateDir() + u"account.json"_q, QJsonObject{ { u"refresh"_q, _refresh }, { u"name"_q, _name } });
+		QFile::setPermissions(StateDir() + u"account.json"_q, QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+	}
+	void apply(const QJsonObject &a) {
+		if (!a.value(u"refresh_token"_q).toString().isEmpty()) {
+			_refresh = a.value(u"refresh_token"_q).toString();
+		}
+		_access = a.value(u"access_token"_q).toString();
+		_accessUntil = crl::now() + (a.value(u"expires_in"_q).toInt(900) - 60) * crl::time(1000);
+		const auto user = a.value(u"user"_q).toObject();
+		if (!user.isEmpty()) {
+			_name = user.value(u"first_name"_q).toString(user.value(u"username"_q).toString());
+		}
+		save();
+	}
+	void withAccess(Fn<void(QString)> then) {
+		if (!_access.isEmpty() && crl::now() < _accessUntil) {
+			then(_access);
+			return;
+		}
+		if (_refresh.isEmpty()) {
+			then(QString());
+			return;
+		}
+		const auto body = QJsonDocument(QJsonObject{ { u"refresh_token"_q, _refresh } }).toJson(QJsonDocument::Compact);
+		request(u"POST"_q, u"/cabinet/auth/refresh"_q, body, QString(), [=](int code, QByteArray answer) {
+			if (code == 200) {
+				apply(QJsonDocument::fromJson(answer).object());
+				then(_access);
+			} else {
+				if (code == 401) {
+					_refresh = QString();
+					save();
+					updateStatus();
+				}
+				then(QString());
+			}
+		});
+	}
+	void poll(QString token, crl::time until, Fn<void(bool, QString)> onDone) {
+		if (!_polling || crl::now() > until) {
+			onDone(false, _polling ? T("Код устарел, попробуйте ещё раз", "The code expired, try again") : QString());
+			_polling = false;
+			return;
+		}
+		base::call_delayed(2000, this, [=] {
+			const auto body = QJsonDocument(QJsonObject{ { u"token"_q, token } }).toJson(QJsonDocument::Compact);
+			request(u"POST"_q, u"/cabinet/auth/deeplink/poll"_q, body, QString(), [=](int code, QByteArray answer) {
+				if (code == 200) {
+					_polling = false;
+					apply(QJsonDocument::fromJson(answer).object());
+					updateStatus();
+					fetchProfile([=](QString error) { onDone(true, error); });
+				} else if (code == 410) {
+					_polling = false;
+					onDone(false, T("Код устарел, попробуйте ещё раз", "The code expired, try again"));
+				} else {
+					poll(token, until, onDone);
+				}
+			});
+		});
+	}
+	void request(QString method, QString path, QByteArray body, QString bearer, Fn<void(int, QByteArray)> done, int origin = 0) {
+		auto req = QNetworkRequest(QUrl(kOrigins[origin] + u"/api"_q + path));
+		req.setHeader(QNetworkRequest::ContentTypeHeader, u"application/json"_q);
+		req.setRawHeader("User-Agent", (GetBrand().name + u" Windows"_q).toUtf8());
+		req.setRawHeader("x-device-os", "Windows");
+		if (!bearer.isEmpty()) {
+			req.setRawHeader("Authorization", "Bearer " + bearer.toUtf8());
+		}
+		req.setTransferTimeout(20000);
+		const auto reply = (method == u"GET"_q) ? _net.get(req) : _net.post(req, body);
+		QObject::connect(reply, &QNetworkReply::finished, this, [=] {
+			reply->deleteLater();
+			const auto code = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+			if ((code == 0 || code >= 500) && origin + 1 < kOrigins.size()) {
+				request(method, path, body, bearer, done, origin + 1);
+				return;
+			}
+			done(code, reply->readAll());
+		});
+	}
+	void updateStatus() {
+		_status = loggedIn()
+			? (T("вход выполнен", "signed in") + (_name.isEmpty() ? QString() : (u" · "_q + _name)))
+			: T("не выполнен — обход входит в подписку", "not signed in — the bypass is part of the subscription");
+	}
+
+	QNetworkAccessManager _net;
+	QString _refresh, _access, _name;
+	crl::time _accessUntil = 0;
+	bool _polling = false;
+	base::Timer _timer;
+	rpl::variable<QString> _status;
+
+};
+
 void CheckUpdates() {
 	const auto url = GetBrand().json.value(u"downloads"_q).toString(u"https://cabinet.zjd.uk/app/downloads.json"_q);
 	const auto manager = new QNetworkAccessManager(qApp);
@@ -665,6 +868,7 @@ const char *AppNameValue::data() const {
 
 void Start() {
 	Bypass::Instance().start();
+	Account::Instance().load();
 	base::call_delayed(15000, qApp, [] { CheckUpdates(); });
 }
 
@@ -698,6 +902,58 @@ rpl::producer<QString> BypassStatusValue() {
 
 bool BypassActive() {
 	return Bypass::Instance().active();
+}
+
+QString AccountTitle() {
+	return T("Аккаунт CloudVPN", "CloudVPN account");
+}
+
+rpl::producer<QString> AccountStatusValue() {
+	return Account::Instance().statusValue();
+}
+
+void AccountClicked() {
+	const auto window = [] { return Core::App().activePrimaryWindow(); };
+	auto &account = Account::Instance();
+	if (account.loggedIn()) {
+		if (const auto w = window()) {
+			w->show(Ui::MakeConfirmBox({
+				.text = T("Выйти из аккаунта CloudVPN? Обход перестанет работать до следующего входа.",
+					"Sign out of CloudVPN? The bypass stops until you sign in again."),
+				.confirmed = [=](Fn<void()> close) { Account::Instance().logout(); close(); },
+				.confirmText = T("Выйти", "Sign out"),
+			}));
+		}
+		return;
+	}
+	const auto url = std::make_shared<QString>();
+	const auto box = std::make_shared<base::weak_qptr<Ui::GenericBox>>();
+	account.startLogin([=](QString code, QString verification) {
+		*url = verification;
+		File::OpenUrl(verification);
+		if (const auto w = window()) {
+			*box = w->show(Ui::MakeConfirmBox({
+				.text = T("Код для входа: ", "Sign-in code: ") + code + u"\n\n"_q
+					+ T("Подтвердите его в открывшемся кабинете CloudVPN. Окно закроется само.",
+						"Confirm it in the CloudVPN cabinet that has opened. This window closes by itself."),
+				.confirmed = [=](Fn<void()>) { File::OpenUrl(*url); },
+				.cancelled = [=](Fn<void()> close) { Account::Instance().cancelLogin(); close(); },
+				.confirmText = T("Открыть кабинет", "Open the cabinet"),
+				.cancelText = T("Отмена", "Cancel"),
+				.title = AccountTitle(),
+			}));
+		}
+	}, [=](bool ok, QString error) {
+		if (*box) {
+			(*box)->closeBox();
+		}
+		const auto text = ok ? error : (error.isEmpty() ? T("Вход отменён", "Sign-in cancelled") : error);
+		if (!text.isEmpty()) {
+			if (const auto w = window()) {
+				w->show(Ui::MakeInformBox(text));
+			}
+		}
+	});
 }
 
 QString AppsTitle() {

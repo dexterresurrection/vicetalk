@@ -170,6 +170,9 @@ public final class Bypass {
         final int mode = getMode();
         final String m = mode == MODE_ALWAYS ? Brand.t("всегда", "always") : mode == MODE_OFF ? Brand.t("выключен", "off") : Brand.t("авто", "auto");
         final String s = active ? Brand.t("сейчас через обход", "now via bypass") : Brand.t("сейчас напрямую", "now direct");
+        if (ctx != null && profileCount() == 0 && !Account.loggedIn(ctx)) {
+            return Brand.t("Войдите в аккаунт CloudVPN — обход входит в подписку", "Sign in to CloudVPN — the bypass is part of the subscription");
+        }
         return Brand.t("Режим: ", "Mode: ") + m + " · " + s;
     }
 
@@ -209,6 +212,9 @@ public final class Bypass {
                         }
                     });
                 }
+            }
+            if (SystemClock.elapsedRealtime() - lastRefresh > 6 * 3600_000L) {
+                bg.post(Bypass::refreshProfiles);
             }
             if (active && (xray == null || !alive(xray)) && mode != MODE_OFF) {
                 if (restarts < 20) {
@@ -412,7 +418,20 @@ public final class Bypass {
         return out;
     }
 
+    private static long lastRefresh;
+
     private static void refreshProfiles() {
+        lastRefresh = SystemClock.elapsedRealtime();
+        if (Account.loggedIn(ctx)) {
+            if (Account.profileAge(ctx) > 6 * 3600_000L || !new File(dir(), "profiles.json").exists()) {
+                final String err = Account.fetchProfile(ctx);
+                if (err != null) {
+                    lastError = err;
+                    note("profiles: " + err);
+                }
+            }
+            return;
+        }
         final String url = Brand.bypass().optString("profiles_url", "");
         if (url.isEmpty() || System.currentTimeMillis() - prefs.getLong("profiles_at", 0) < 12 * 3600_000L) {
             return;
@@ -422,18 +441,9 @@ public final class Bypass {
             c = (HttpURLConnection) new URL(url).openConnection();
             c.setConnectTimeout(8000);
             c.setReadTimeout(8000);
-            c.setRequestProperty("User-Agent", Brand.name + "/" + ApplicationLoader.applicationContext.getPackageManager()
-                    .getPackageInfo(ctx.getPackageName(), 0).versionName);
             if (c.getResponseCode() == 200) {
-                final String body = Brand.readAll(c.getInputStream());
-                final JSONObject o = new JSONObject(body);
-                if (o.optJSONArray("xray") != null) {
-                    final File f = new File(dir(), "profiles.json");
-                    try (FileOutputStream fo = new FileOutputStream(f)) {
-                        fo.write(body.getBytes(StandardCharsets.UTF_8));
-                    }
-                    prefs.edit().putLong("profiles_at", System.currentTimeMillis()).apply();
-                }
+                saveProfiles(Brand.readAll(c.getInputStream()));
+                prefs.edit().putLong("profiles_at", System.currentTimeMillis()).apply();
             }
         } catch (Throwable e) {
             note("profiles: " + e.getClass().getSimpleName());
@@ -441,6 +451,58 @@ public final class Bypass {
             if (c != null) {
                 c.disconnect();
             }
+        }
+    }
+
+    /** New bypass profiles (account or profiles_url): saved, MTProto fallbacks added, a running core restarted. */
+    public static void saveProfiles(String body) throws Exception {
+        final JSONObject o = new JSONObject(body);
+        if (o.optJSONArray("xray") == null) {
+            throw new IllegalArgumentException("no xray list");
+        }
+        try (FileOutputStream fo = new FileOutputStream(new File(dir(), "profiles.json"))) {
+            fo.write(body.getBytes(StandardCharsets.UTF_8));
+        }
+        note("profiles: " + o.optJSONArray("xray").length() + " xray, " + Brand.array(o, "mtproto").length() + " mtproto");
+        lastError = "";
+        ui.post(() -> {
+            try {
+                addMtprotoFallbacks();
+            } catch (Throwable e) {
+                FileLog.e(e);
+            }
+            if (active) {
+                bg.post(() -> {
+                    stopXray();
+                    if (startXraySafe()) {
+                        ui.post(() -> useTelegramProxy(ProxySettings.builder().setType(ProxySettings.Type.SOCKS5)
+                                .setAddress(LOCAL).setPort(port).setUser(user).setPassword(pass).build()));
+                    }
+                });
+            } else if (getMode() == MODE_ALWAYS) {
+                enable("profiles arrived");
+            }
+        });
+    }
+
+    public static void clearProfiles() {
+        if (ctx == null) {
+            return;
+        }
+        new File(dir(), "profiles.json").delete();
+        if (active) {
+            ui.post(() -> disable("signed out"));
+        }
+    }
+
+    public static void refreshNow() {
+        if (bg != null) {
+            bg.post(() -> {
+                if (Account.loggedIn(ctx)) {
+                    final String err = Account.fetchProfile(ctx);
+                    lastError = err != null ? err : "";
+                }
+            });
         }
     }
 

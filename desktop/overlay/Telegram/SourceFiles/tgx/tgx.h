@@ -58,6 +58,10 @@ void SetBypassMode(BypassMode mode);
 [[nodiscard]] QString BypassTitle();
 [[nodiscard]] rpl::producer<QString> BypassStatusValue();
 [[nodiscard]] bool BypassActive();
+[[nodiscard]] QString AccountTitle();
+[[nodiscard]] rpl::producer<QString> AccountStatusValue();
+// sign in (device code confirmed in the cabinet) or out, boxes on the active window
+void AccountClicked();
 [[nodiscard]] QString AppsTitle();
 void OpenApps();
 
