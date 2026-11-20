@@ -51,10 +51,22 @@ J
 )
 # Telegram Desktop's public development keys (TDESKTOP_API_TEST) — CI only, never in a published build
 KEYS_JSON='"api_id":17349,"api_hash":"344583e45741c457fe1862106095a5eb"'
-CLOUD="{\"v\":1,\"brand\":\"cloud\",\"name\":\"Cloud Talk\",\"product\":\"talk\",$KEYS_JSON,\"bypass\":{\"mode\":\"auto\",\"xray\":[$OUTB],\"mtproto\":[]},\"ads_slot\":\"talk.settings\"}"
-VICE="{\"v\":1,\"brand\":\"vice\",\"name\":\"Vice Talk\",\"product\":\"vice-talk\",\"theme\":\"vice-night\",$KEYS_JSON,\"bypass\":{\"mode\":\"auto\",\"xray\":[$OUTB],\"mtproto\":[]},\"ads_slot\":\"talk.settings\"}"
+DL='"downloads":"http://10.0.2.2:8080/downloads.json",'
+CLOUD="{\"v\":1,$DL\"brand\":\"cloud\",\"name\":\"Cloud Talk\",\"product\":\"talk\",$KEYS_JSON,\"bypass\":{\"mode\":\"auto\",\"xray\":[$OUTB],\"mtproto\":[]},\"ads_slot\":\"talk.settings\"}"
+VICE="{\"v\":1,$DL\"brand\":\"vice\",\"name\":\"Vice Talk\",\"product\":\"vice-talk\",\"theme\":\"vice-night\",$KEYS_JSON,\"bypass\":{\"mode\":\"auto\",\"xray\":[$OUTB],\"mtproto\":[]},\"ads_slot\":\"talk.settings\"}"
 export BRAND_APK_LOCAL=1 BRAND_APK_BUILD_TOOLS=$BT
 python3 tools/brand_apk.py --in out/CloudTalk-unsigned-ci.apk --out ci/cloud.apk --keystore-props ci/ci.properties --brand "$CLOUD" --any-cert
 python3 tools/brand_apk.py --in ci/cloud.apk --out ci/vice.apk --keystore-props ci/ci.properties --brand "$VICE" \
   --enable ViceIcon --disable DefaultIcon --label alias
+python3 tools/brand_apk.py --in out/CloudTalk-old-unsigned-ci.apk --out ci/old.apk --keystore-props ci/ci.properties --brand "$CLOUD" --any-cert
+
+# ---- update server for the in-app update check: downloads.json → ci/cloud.apk (the newer build)
+NEWVER=$(cat VERSION)
+SHA=$(sha256sum ci/cloud.apk | cut -d' ' -f1)
+cat > ci/downloads.json <<J
+{"products":{"talk":{"title":"Cloud Talk","version":"$NEWVER","notes":"CI","files":[{"label":"Android","flavor":"talk-universal","name":"CloudTalk-$NEWVER.apk","sha256":"$SHA","server":"http://10.0.2.2:8080/cloud.apk"}]}}}
+J
+(cd ci && nohup python3 -m http.server 8080 --bind 0.0.0.0 > ../results/http.log 2>&1 &)
+sleep 1
+curl -s http://127.0.0.1:8080/downloads.json | head -c 200; echo
 ls -la ci

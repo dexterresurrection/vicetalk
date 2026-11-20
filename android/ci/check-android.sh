@@ -28,6 +28,53 @@ wait_log() {   # wait_log <regex> <seconds>
   return 1
 }
 
+
+ui_dump() { adb shell uiautomator dump /sdcard/ui.xml >/dev/null 2>&1; adb exec-out cat /sdcard/ui.xml 2>/dev/null; }
+tap_text() {   # tap_text <regex> [seconds]: waits for a node whose text matches (case-insensitive) and taps its centre
+  local end=$((SECONDS + ${2:-20})) xy
+  while [ $SECONDS -lt $end ]; do
+    xy=$(ui_dump | python3 -c '
+import re, sys
+x, want = sys.stdin.read(), re.compile(sys.argv[1], re.I)
+for m in re.finditer(r"<node [^>]*>", x):
+    n = m.group(0)
+    t = re.search(r" text=\"([^\"]*)\"", n)
+    b = re.search(r"bounds=\"\[(\d+),(\d+)\]\[(\d+),(\d+)\]\"", n)
+    if t and b and want.fullmatch(t.group(1).strip()):
+        x1, y1, x2, y2 = map(int, b.groups()); print((x1 + x2) // 2, (y1 + y2) // 2); break
+' "$1")
+    if [ -n "$xy" ]; then adb shell input tap $xy; return 0; fi
+    sleep 2
+  done
+  return 1
+}
+
+update_check() {   # C. in-app update: old build 0.0.9 → the newer build from the runner's downloads.json
+  local newver; newver=$(cat VERSION)
+  adb uninstall $PKG >/dev/null 2>&1
+  if adb install ci/old.apk >/dev/null 2>&1; then ok "update: old build 0.0.9 installed"; else bad "update: install old build"; return; fi
+  adb logcat -c
+  adb shell monkey -p $PKG -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1
+  if l=$(wait_log "update: mine 0\.0\.9, latest $newver" 90); then ok "update: the app sees $newver in downloads.json"; else bad "update: no update check"; return; fi
+  if tap_text "(update|обновить)" 30; then ok "update: «Update» tapped in the update dialog"; else bad "update: no update dialog"; shot update-dialog; return; fi
+  if wait_log "update: downloaded" 90 >/dev/null; then ok "update: APK downloaded inside the app, sha256 checked"; else bad "update: download"; return; fi
+  if wait_log "asked for the install permission" 8 >/dev/null; then
+    shot update-permission
+    if tap_text "(allow from this source|разрешить установку из этого источника)" 20; then ok "update: install permission given in Settings"; else
+      adb shell appops set $PKG REQUEST_INSTALL_PACKAGES allow; note "update: permission switch not found, appops used"; fi
+  fi
+  if wait_log "update: installer opened" 40 >/dev/null; then ok "update: system installer opened by the app"; else bad "update: installer not opened"; return; fi
+  sleep 3; shot update-installer
+  tap_text "(update|install|обновить|установить)" 30 || note "update: installer button not found"
+  local end=$((SECONDS + 90)) v=''
+  while [ $SECONDS -lt $end ]; do
+    v=$(adb shell dumpsys package $PKG | tr -d '\r' | grep -m1 -o "versionName=[^ ]*")
+    case "$v" in *-ct.$newver) break ;; esac
+    sleep 3
+  done
+  case "$v" in *-ct.$newver) ok "update: in-app update 0.0.9 → $newver done ($v)" ;; *) bad "update: still $v after the installer"; shot update-after ;; esac
+}
+
 run_line() {   # run_line <apk> <tag> <expected alias> <expected label>
   local apk=$1 tag=$2 alias=$3 label=$4
   if adb install -r "$apk" >/dev/null 2>&1; then ok "$tag: installed"; else bad "$tag: install"; return; fi
@@ -58,6 +105,7 @@ run_line() {   # run_line <apk> <tag> <expected alias> <expected label>
   grep " tgx " "$R/$tag-logcat.txt" | tail -40 > "$R/$tag-tgx.txt" || true
 }
 
+update_check
 run_line ci/cloud.apk cloud DefaultIcon "Cloud Talk"
 n=$(sudo grep -cE '(149\.154\.|91\.108\.)[0-9.]+:(443|80|5222)' /opt/xr/access.log 2>/dev/null || echo 0)
 if [ "${n:-0}" -gt 0 ]; then ok "test server: $n connections to Telegram data centers went through it"; else bad "test server: no Telegram connections in its log"; fi

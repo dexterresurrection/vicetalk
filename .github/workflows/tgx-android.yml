@@ -26,22 +26,35 @@ jobs:
       - name: reuse?
         id: reuse
         run: echo "id=$(cat talk/android/native-run-id.txt 2>/dev/null | tr -d '[:space:]')" >> "$GITHUB_OUTPUT"
+      - name: libraries from the earlier run
+        if: steps.reuse.outputs.id != ''
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: native-${{ matrix.abi }}
+          path: native
+          run-id: ${{ steps.reuse.outputs.id }}
+          github-token: ${{ github.token }}
+      - name: have?
+        id: have
+        run: |
+          if ls native/lib/${{ matrix.abi }}/libtmessages*.so >/dev/null 2>&1; then echo "ok=1" >> "$GITHUB_OUTPUT"; echo "reused"; else echo "ok=0" >> "$GITHUB_OUTPUT"; fi
       - name: free disk
-        if: steps.reuse.outputs.id == ''
+        if: steps.have.outputs.ok != '1'
         run: sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /usr/local/share/powershell /opt/hostedtoolcache/CodeQL /usr/local/share/boost
       - uses: actions/setup-java@v4
-        if: steps.reuse.outputs.id == ''
+        if: steps.have.outputs.ok != '1'
         with:
           distribution: temurin
           java-version: 17
       - name: tools
-        if: steps.reuse.outputs.id == ''
+        if: steps.have.outputs.ok != '1'
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq nasm yasm meson ninja-build gperf pkg-config autoconf automake libtool >/dev/null
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$ANDROID_HOME" "ndk;27.2.12479018" "cmake;3.22.1" >/dev/null
           rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android i686-linux-android
       - name: sources (all submodules)
-        if: steps.reuse.outputs.id == ''
+        if: steps.have.outputs.ok != '1'
         run: |
           git init -q tg && cd tg
           git remote add origin "$TG_REPO"
@@ -53,29 +66,24 @@ jobs:
             [ -d "$d" ] && (cd "$d" && rustup show active-toolchain && rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android i686-linux-android)
           done
       - name: prebuilt third-party libraries (${{ matrix.abi }})
-        if: steps.reuse.outputs.id == ''
+        if: steps.have.outputs.ok != '1'
         run: |
           cd tg
           ABIS="${{ matrix.abi }}" ANDROID_SDK_ROOT="$ANDROID_HOME" JOBS=4 bash TMessagesProj/jni/prebuild/build_all.sh > ../prebuild.log 2>&1 || { tail -80 ../prebuild.log; exit 1; }
           tail -5 ../prebuild.log; ls TMessagesProj/jni/prebuild/lib/${{ matrix.abi }}
       - name: libtmessages + libtwidget (${{ matrix.abi }})
-        if: steps.reuse.outputs.id == ''
+        if: steps.have.outputs.ok != '1'
         run: |
           cd tg
           sed -i 's/abiFilters "armeabi-v7a", "arm64-v8a", "x86", "x86_64"/abiFilters "${{ matrix.abi }}"/' TMessagesProj_AppStandalone/build.gradle
           grep -n abiFilters TMessagesProj_AppStandalone/build.gradle
-          ./gradlew --no-daemon -q -Dorg.gradle.jvmargs="-Xmx6g" -Pandroid.injected.build.abi=${{ matrix.abi }} :TMessagesProj_AppStandalone:assembleAfatStandalone
+          for i in 1 2 3; do   # plugins.gradle.org sometimes fails to serve a POM: retry
+            ./gradlew --no-daemon -q -Dorg.gradle.jvmargs="-Xmx6g" -Pandroid.injected.build.abi=${{ matrix.abi }} :TMessagesProj_AppStandalone:assembleAfatStandalone && break
+            [ $i = 3 ] && exit 1; sleep 30
+          done
           APK=$(find TMessagesProj_AppStandalone/build/outputs/apk -name '*.apk' | head -1)
           mkdir -p ../native && unzip -q -o "$APK" "lib/${{ matrix.abi }}/*" -d ../native
           ls -la ../native/lib/${{ matrix.abi }}
-      - name: libraries from the earlier run
-        if: steps.reuse.outputs.id != ''
-        uses: actions/download-artifact@v4
-        with:
-          name: native-${{ matrix.abi }}
-          path: native
-          run-id: ${{ steps.reuse.outputs.id }}
-          github-token: ${{ github.token }}
       - uses: actions/upload-artifact@v4
         with:
           name: native-${{ matrix.abi }}
@@ -146,7 +154,10 @@ jobs:
       - name: gradle
         run: |
           cd tg
-          ./gradlew --no-daemon -Dorg.gradle.jvmargs="-Xmx7g -XX:MaxMetaspaceSize=1g" :TMessagesProj_AppStandalone:assembleAfatStandalone
+          for i in 1 2 3; do
+            ./gradlew --no-daemon -Dorg.gradle.jvmargs="-Xmx7g -XX:MaxMetaspaceSize=1g" :TMessagesProj_AppStandalone:assembleAfatStandalone && break
+            [ $i = 3 ] && exit 1; sleep 30
+          done
           find . -name '*.apk' -path '*outputs*' | xargs ls -la
       - name: collect
         run: |
@@ -155,7 +166,15 @@ jobs:
           BT=$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)
           "$ANDROID_HOME/build-tools/$BT/aapt2" dump xmltree --file AndroidManifest.xml out/CloudTalk-unsigned-ci.apk | grep -E 'messenger\.(Default|Vice)Icon' | tee out/res-check.txt
           [ "$(wc -l < out/res-check.txt)" -ge 2 ] || { echo "no Cloud/Vice launcher aliases in the manifest"; exit 1; }
-          sha256sum out/*.apk
+      - name: older build for the in-app update check (same code, version 0.0.9, versionCode − 1)
+        run: |
+          cd tg
+          CODE=$(sed -n 's/^APP_VERSION_CODE=//p' gradle.properties)
+          sed -i "s/^APP_VERSION_CODE=.*/APP_VERSION_CODE=$((CODE - 1))/; s/^\(APP_VERSION_NAME=.*-ct\.\).*/\10.0.9/" gradle.properties
+          grep '^APP_VERSION' gradle.properties
+          ./gradlew --no-daemon -q -Dorg.gradle.jvmargs="-Xmx7g -XX:MaxMetaspaceSize=1g" :TMessagesProj_AppStandalone:assembleAfatStandalone
+          cp TMessagesProj_AppStandalone/build/outputs/apk/afat/standalone/app.apk ../out/CloudTalk-old-unsigned-ci.apk
+          sha256sum ../out/*.apk
       - uses: actions/upload-artifact@v4
         with:
           name: apk
