@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Run a workflow of the public repository github.com/dexterresurrection/vicetalk (workflow_dispatch on main)
-and fetch its artifacts:   tools/gh_run.py <workflow.yml> <out dir> [--wait-min 600]
+and fetch its artifacts:   tools/gh_run.py <workflow.yml> <out dir> [--wait-min 600] [--input key=value …]
 Publish the tree first (tools/publish_public.sh). Token: /root/chihua.txt, only in the Authorization header."""
 import datetime
 import io
@@ -22,8 +22,12 @@ def main():
         sys.exit(__doc__)
     wf, out = a[0], a[1]
     wait_min = int(a[a.index('--wait-min') + 1]) if '--wait-min' in a else 600
+    inputs = dict(x.split('=', 1) for x in [a[i + 1] for i, v in enumerate(a) if v == '--input'])
     since = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(seconds=5)
-    api(f'/actions/workflows/{wf}/dispatches', method='POST', body={'ref': 'main'})
+    body = {'ref': 'main'}
+    if inputs:
+        body['inputs'] = inputs
+    api(f'/actions/workflows/{wf}/dispatches', method='POST', body=body)
     print('dispatched', wf, flush=True)
     run, last = None, ''
     deadline = time.time() + wait_min * 60

@@ -1,0 +1,36 @@
+name: talk-win-check
+# Cloud Talk / Vice Talk installers on a real Windows: install, bypass with Telegram blocked by the firewall,
+# Vice over Cloud, uninstall. Installers come from our bucket (temporary ci/ keys) — tools/win_check.py.
+on:
+  workflow_dispatch:
+    inputs:
+      setup_url: {required: true}
+      setup_sha: {required: true}
+      vice_url: {required: false, default: ""}
+      vice_sha: {required: false, default: ""}
+jobs:
+  check:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - name: inputs
+        shell: bash
+        env:
+          SETUP_URL: ${{ inputs.setup_url }}
+          SETUP_SHA: ${{ inputs.setup_sha }}
+          VICE_URL: ${{ inputs.vice_url }}
+          VICE_SHA: ${{ inputs.vice_sha }}
+        run: |
+          cd desktop/ci/wincheck
+          echo "$SETUP_URL" > setup-url.txt; echo "$SETUP_SHA" > setup-sha.txt
+          if [ -n "$VICE_URL" ]; then echo "$VICE_URL" > vice-url.txt; echo "$VICE_SHA" > vice-sha.txt; fi
+      - name: check
+        shell: pwsh
+        working-directory: desktop/ci/wincheck
+        run: ./check.ps1
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: results
+          path: desktop/ci/wincheck/results

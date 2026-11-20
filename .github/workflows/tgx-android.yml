@@ -78,11 +78,18 @@ jobs:
           sed -i 's/abiFilters "armeabi-v7a", "arm64-v8a", "x86", "x86_64"/abiFilters "${{ matrix.abi }}"/' TMessagesProj_AppStandalone/build.gradle
           grep -n abiFilters TMessagesProj_AppStandalone/build.gradle
           for i in 1 2 3; do   # plugins.gradle.org sometimes fails to serve a POM: retry
-            ./gradlew --no-daemon -q -Dorg.gradle.jvmargs="-Xmx6g" -Pandroid.injected.build.abi=${{ matrix.abi }} :TMessagesProj_AppStandalone:assembleAfatStandalone && break
+            ./gradlew --no-daemon -q -Dorg.gradle.jvmargs="-Xmx6g" :TMessagesProj_AppStandalone:assembleAfatStandalone && break
             [ $i = 3 ] && exit 1; sleep 30
           done
-          APK=$(find TMessagesProj_AppStandalone/build/outputs/apk -name '*.apk' | head -1)
-          mkdir -p ../native && unzip -q -o "$APK" "lib/${{ matrix.abi }}/*" -d ../native
+          mkdir -p ../native/lib/${{ matrix.abi }}
+          APK=$(find . -path '*/build/*' -name '*.apk' | grep -i standalone | head -1)
+          if [ -n "$APK" ]; then
+            echo "APK: $APK"; unzip -q -o "$APK" "lib/${{ matrix.abi }}/*" -d ../native
+          else
+            # no APK: the stripped native libraries of the build
+            find . -path '*stripped_native_libs*' -path '*/${{ matrix.abi }}/*' -name '*.so' -exec cp {} ../native/lib/${{ matrix.abi }}/ \;
+          fi
+          ls ../native/lib/${{ matrix.abi }}/libtmessages*.so
           ls -la ../native/lib/${{ matrix.abi }}
       - uses: actions/upload-artifact@v4
         with:
