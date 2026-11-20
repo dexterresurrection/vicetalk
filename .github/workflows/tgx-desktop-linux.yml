@@ -1,0 +1,62 @@
+name: talk-desktop-linux
+# Fast compile check of the desktop patch (Linux, Telegram's own build image with prebuilt libraries)
+# and a Linux binary for the bypass demonstration from our Russian server.
+on:
+  workflow_dispatch:
+env:
+  TD_TAG: v7.4.4
+  XRAY: v26.11.9
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: talk
+      - name: free disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /usr/local/share/powershell /opt/hostedtoolcache/CodeQL /usr/local/share/boost /usr/local/lib/android
+          df -h /
+      - name: Telegram Desktop sources
+        run: |
+          git clone -q --recursive --shallow-submodules --depth 1 -b "$TD_TAG" https://github.com/telegramdesktop/tdesktop.git tdesktop
+          cd tdesktop && git log -1 --format='%H %s'
+      - name: apply Cloud Talk
+        run: python3 talk/desktop/apply.py tdesktop
+      - name: build image (published image + libraries the tag needs that it lacks)
+        run: |
+          docker pull -q ghcr.io/telegramdesktop/tdesktop/centos_env:latest
+          python3 talk/desktop/ci/extra_dockerfile.py tdesktop Dockerfile.extra
+          DOCKER_BUILDKIT=1 docker build -q -t talk-env -f Dockerfile.extra . 2>&1 | tail -30
+      - name: build
+        run: |
+          docker run --rm -u $(id -u) -v $PWD/tdesktop:/usr/src/tdesktop -e CONFIG=Release -e KEEP_GOING=1 \
+            talk-env \
+            /usr/src/tdesktop/Telegram/build/docker/centos_env/build.sh \
+            -D TDESKTOP_API_TEST=ON -D DESKTOP_APP_DISABLE_AUTOUPDATE=ON -D DESKTOP_APP_DISABLE_CRASH_REPORTS=ON 2>&1 | tee build.log | grep -E "error|Error|FAILED|\[[0-9]+/[0-9]+\]" | grep -v "^\[.*Building\|-Werror" | tail -400
+          test -x tdesktop/out/Release/Telegram
+      - name: errors
+        if: failure()
+        run: grep -E "error:|FAILED:" build.log | head -200 > errors.txt || true
+      - name: package
+        run: |
+          mkdir -p out/CloudTalk
+          cp tdesktop/out/Release/Telegram out/CloudTalk/CloudTalk
+          curl -sSfL --retry 3 -o x.zip "https://github.com/XTLS/Xray-core/releases/download/$XRAY/Xray-linux-64.zip"
+          unzip -q -o x.zip xray -d out/CloudTalk && chmod 755 out/CloudTalk/xray
+          tar -C out -czf out/CloudTalk-linux-x64.tar.gz CloudTalk
+          ls -la out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: out/CloudTalk-linux-x64.tar.gz
+          retention-days: 3
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: build-log
+          path: |
+            build.log
+            errors.txt
+          retention-days: 3

@@ -1,0 +1,34 @@
+name: talk-desktop-win-build
+# Only the Cloud Talk exe, on libraries from an earlier talk-desktop-win run (artifact libs-3 of LIBS_RUN_ID),
+# so a code change does not rebuild Qt/WebRTC/FFmpeg. LIBS_RUN_ID is written into libs-run-id.txt by tools/ci_run.py users.
+on:
+  workflow_dispatch:
+env:
+  TD_TAG: v7.4.4
+  XRAY: v26.11.9
+  SDK: 10.0.26100.0
+defaults:
+  run:
+    shell: cmd
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 350
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: talk
+      - name: run id of the libraries
+        shell: bash
+        run: echo "LIBS_RUN_ID=$(cat talk/desktop/ci/libs-run-id.txt)" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@v4
+        with:
+          name: libs-3
+          path: libs-in
+          run-id: ${{ env.LIBS_RUN_ID }}
+          github-token: ${{ github.token }}
+      - name: build Cloud Talk
+        uses: ./talk/.github/actions/tdbuild
