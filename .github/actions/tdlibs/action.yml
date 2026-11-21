@@ -24,12 +24,18 @@ runs:
         # prepare.py also reads files of the submodules (cmake/external/…)
         git clone -q --recursive --shallow-submodules --depth 1 -b "$TD_TAG" https://github.com/telegramdesktop/tdesktop.git "$TBUILD/tdesktop"
         sed -i '/CMAKE_${lang}_FLAGS_DEBUG_INIT/s/${_Zi}//' "$PROGRAMFILES"/CMake/share/cmake*/Modules/Platform/Windows-MSVC.cmake || true
+        # crash reports are off in our builds (DESKTOP_APP_DISABLE_CRASH_REPORTS=ON): no breakpad/crashpad, which also
+        # need ATL that the 14.44 toolset of the runner image lacks
+        P="$TBUILD/tdesktop/Telegram/build/prepare/prepare.py"
+        sed -i "s/^stage('breakpad', \"\"\"/if False: stage('breakpad', \"\"\"/; s/^stage('crashpad', \"\"\"/if False: stage('crashpad', \"\"\"/" "$P"
+        grep -n "if False: stage" "$P"
         git config --global user.email "ci@example.com"
         git config --global user.name "CI"
     - uses: Eden-CI/msvc-dev-cmd@master
       with:
         arch: x64
         sdk: ${{ env.SDK }}
+        toolset: "14.44"
     - name: NuGet sources
       shell: cmd
       run: |
