@@ -96,6 +96,47 @@ if (fetch 'setup-url.txt' 'setup-sha.txt' "$env:TEMP\CloudTalk-Setup.exe") {
   if (Test-Path "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\Cloud Talk.lnk") { ok 'Cloud: Start menu shortcut' } else { note 'Cloud: no Start menu shortcut in ProgramData' }
   run-line $dir 'cloud' 'Cloud Talk'
 }
+# ---------- in-app update: an older version of the client (talk.json 0.0.9) downloads this installer and restarts itself
+if ($dir -and (Test-Path "$dir\CloudTalk.exe")) {
+  New-Item -ItemType Directory -Force C:\updsrv | Out-Null
+  $ver = (Get-Content "$dir\talk.json" -Raw | ConvertFrom-Json).version
+  if (-not $ver) { $ver = '0.1.0' }
+  $setup = "CloudTalk-Setup-$ver.exe"
+  Copy-Item "$env:TEMP\CloudTalk-Setup.exe" "C:\updsrv\$setup"
+  $sha = (Get-FileHash "C:\updsrv\$setup" -Algorithm SHA256).Hash.ToLower()
+  @{ products = @{ 'talk-win' = @{ title = 'Cloud Talk'; version = $ver; notes = 'CI'; files = @(@{ label = 'Windows'; flavor = 'talk-win'; name = $setup; sha256 = $sha; server = "http://127.0.0.1:8080/$setup" }) } } } | ConvertTo-Json -Depth 8 | Out-File C:\updsrv\downloads.json -Encoding ascii
+  $web = Start-Process python -ArgumentList '-m','http.server','8080','--bind','127.0.0.1' -WorkingDirectory C:\updsrv -PassThru -WindowStyle Hidden
+  Start-Sleep 2
+  $old = $talkcfg | ConvertFrom-Json
+  $old.version = '0.0.9'
+  $old | Add-Member -NotePropertyName downloads -NotePropertyValue 'http://127.0.0.1:8080/downloads.json' -Force
+  ($old | ConvertTo-Json -Depth 20 -Compress) | Out-File "$dir\talk.json" -Encoding ascii
+  Remove-Item "$env:APPDATA\Cloud Talk\log.txt" -ErrorAction SilentlyContinue
+  $env:TGX_CI_AUTO_UPDATE = '1'
+  $oldp = Start-Process "$dir\CloudTalk.exe" -PassThru
+  $env:TGX_CI_AUTO_UPDATE = ''
+  $deadline = (Get-Date).AddSeconds(240); $started = $false
+  while ((Get-Date) -lt $deadline) {
+    Start-Sleep 3
+    $t = Get-Content "$env:APPDATA\Cloud Talk\log.txt" -Raw -ErrorAction SilentlyContinue
+    if ($t -match 'update installer started') { $started = $true; break }
+  }
+  $lg = Get-Content "$env:APPDATA\Cloud Talk\log.txt" -Raw -ErrorAction SilentlyContinue
+  if ($lg -match 'update check: mine 0\.0\.9, latest') { ok 'update: the old client sees the new version' } else { bad 'update: no update check in the log' }
+  if ($started) { ok 'update: downloaded inside the client, sha256 checked, installer started' } else { bad 'update: installer was not started' }
+  $deadline = (Get-Date).AddSeconds(90); $again = $false
+  while ((Get-Date) -lt $deadline) {
+    Start-Sleep 3
+    $p2 = Get-Process CloudTalk -ErrorAction SilentlyContinue | Where-Object { $_.Id -ne $oldp.Id }
+    if ($p2) { $again = $true; break }
+  }
+  $dv = (Get-ItemProperty 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\CloudTalk' -ErrorAction SilentlyContinue).DisplayVersion
+  if ($dv -eq $ver) { ok "update: installed version in the system: $dv" } else { bad "update: version in the system: $dv" }
+  if ($again) { ok 'update: the program opened again by itself' } else { bad 'update: the program did not open again' }
+  Stop-Process -Name CloudTalk -Force -ErrorAction SilentlyContinue
+  Stop-Process -Id $web.Id -Force -ErrorAction SilentlyContinue
+  Start-Sleep 3
+}
 $n = (Select-String -Path C:\xrsrv\access.log -Pattern '(149\.154\.|91\.108\.)[0-9.]+:(443|80|5222)' -ErrorAction SilentlyContinue | Measure-Object).Count
 if ($n -gt 0) { ok "test server: $n connections to Telegram data centers went through it" } else { bad 'test server: no Telegram connections in its log' }
 

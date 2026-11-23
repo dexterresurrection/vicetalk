@@ -20,6 +20,7 @@ RequestExecutionLevel admin
 !define CI_ASSETS "${__FILEDIR__}\assets"
 !define CI_ASSETS_VICE "${__FILEDIR__}\assets-vice"
 !define UNKEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\CloudTalk"
+!include "FileFunc.nsh"
 !include "${__FILEDIR__}\cloudinstaller.nsh"
 
 Name "${CI_APPNAME}"
@@ -66,6 +67,13 @@ Section "main"
   WriteRegStr HKLM "${UNKEY}" "InstallLocation" "$INSTDIR"
   WriteRegStr HKLM "${UNKEY}" "UninstallString" '"$INSTDIR\uninstall.exe"'
   WriteRegStr HKLM "${UNKEY}" "QuietUninstallString" '"$INSTDIR\uninstall.exe" /S'
+  ; /RUN — silent update from the program itself: open it again
+  ${GetParameters} $R0
+  ClearErrors
+  ${GetOptions} $R0 "/RUN" $R1
+  ${IfNot} ${Errors}
+    Call CI_RunApp
+  ${EndIf}
 SectionEnd
 
 Function un.onInit

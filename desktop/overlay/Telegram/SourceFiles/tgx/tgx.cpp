@@ -17,6 +17,7 @@ Licensed under GNU GPL v3 with the OpenSSL exception, like Telegram Desktop.
 
 #include <QtCore/QCoreApplication>
 #include <QtCore/QDateTime>
+#include <QtCore/QCryptographicHash>
 #include <QtCore/QDir>
 #include <QtCore/QFile>
 #include <QtCore/QFileInfo>
@@ -24,6 +25,7 @@ Licensed under GNU GPL v3 with the OpenSSL exception, like Telegram Desktop.
 #include <QtCore/QLocale>
 #include <QtCore/QProcess>
 #include <QtCore/QRandomGenerator>
+#include <QtCore/QRegularExpression>
 #include <QtCore/QStandardPaths>
 #include <QtCore/QUrl>
 #include <QtNetwork/QHostAddress>
@@ -35,6 +37,7 @@ Licensed under GNU GPL v3 with the OpenSSL exception, like Telegram Desktop.
 
 #ifdef Q_OS_WIN
 #include <windows.h>
+#include <shellapi.h>
 #endif // Q_OS_WIN
 
 #include <rpl/variable.h>
@@ -765,6 +768,117 @@ private:
 
 };
 
+// ---------------------------------------------------------------- in-app update: the installer is downloaded here (resume,
+// three mirrors), its sha256 is checked against downloads.json, then it runs silently and opens the program again
+
+class UpdateDownload final : public QObject {
+public:
+	UpdateDownload(QStringList urls, QString name, QString sha256)
+	: _urls(std::move(urls))
+	, _path(StateDir() + u"update/"_q + name)
+	, _sha256(sha256.toLower()) {
+		QDir().mkpath(StateDir() + u"update/"_q);
+	}
+	void start() {
+		next();
+	}
+
+private:
+	void next() {
+		if (_index >= _urls.size()) {
+			finish(T("Не удалось скачать обновление. Его можно взять на странице загрузок.", "Could not download the update. You can get it on the download page."));
+			return;
+		}
+		_part.setFileName(_path + u".part"_q);
+		if (!_part.open(QIODevice::ReadWrite)) {
+			finish(T("Нет места для обновления", "No room for the update"));
+			return;
+		}
+		_part.seek(_part.size());
+		const auto have = _part.size();
+		auto req = QNetworkRequest(QUrl(_urls[_index]));
+		req.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
+		req.setTransferTimeout(60000);
+		if (have > 0) {
+			req.setRawHeader("Range", "bytes=" + QByteArray::number(have) + "-");
+		}
+		_reply = _net.get(req);
+		QObject::connect(_reply, &QNetworkReply::readyRead, this, [=] {
+			const auto code = _reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+			if (code == 200 && _part.size() > 0 && have > 0 && !_restarted) {
+				_restarted = true;   // the server ignored Range: start over
+				_part.resize(0);
+			}
+			_part.write(_reply->readAll());
+		});
+		QObject::connect(_reply, &QNetworkReply::finished, this, [=] {
+			const auto code = _reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+			const auto ok = (_reply->error() == QNetworkReply::NoError) || code == 416;
+			_reply->deleteLater();
+			_part.close();
+			_restarted = false;
+			if (!ok) {
+				if (_tries++ < 4) {
+					base::call_delayed(3000, this, [=] { next(); });
+				} else {
+					_tries = 0;
+					++_index;
+					next();
+				}
+				return;
+			}
+			auto file = QFile(_path + u".part"_q);
+			auto hash = QCryptographicHash(QCryptographicHash::Sha256);
+			if (file.open(QIODevice::ReadOnly)) {
+				hash.addData(&file);
+				file.close();
+			}
+			if (_sha256.isEmpty() || QString::fromLatin1(hash.result().toHex()) == _sha256) {
+				QFile::remove(_path);
+				QFile::rename(_path + u".part"_q, _path);
+				install();
+			} else {
+				LOG(("Tgx: update sha256 mismatch from %1").arg(_urls[_index]));
+				QFile::remove(_path + u".part"_q);
+				++_index;
+				next();
+			}
+		});
+	}
+	void install() {
+		LOG(("Tgx: update downloaded: %1").arg(_path));
+#ifdef Q_OS_WIN
+		const auto path = QDir::toNativeSeparators(_path).toStdWString();
+		const auto result = reinterpret_cast<INT_PTR>(ShellExecuteW(nullptr, L"runas", path.c_str(), L"/S /RUN", nullptr, SW_SHOWNORMAL));
+		if (result <= 32) {
+			finish(T("Установка отменена", "The installation was cancelled"));
+			return;
+		}
+		LOG(("Tgx: update installer started"));
+		Core::Quit();
+#else // Q_OS_WIN
+		File::OpenUrl(u"file://"_q + _path);
+#endif // Q_OS_WIN
+		deleteLater();
+	}
+	void finish(QString text) {
+		if (const auto window = Core::App().activePrimaryWindow()) {
+			window->show(Ui::MakeInformBox(text));
+		}
+		deleteLater();
+	}
+
+	QNetworkAccessManager _net;
+	QNetworkReply *_reply = nullptr;
+	QStringList _urls;
+	QString _path, _sha256;
+	QFile _part;
+	int _index = 0;
+	int _tries = 0;
+	bool _restarted = false;
+
+};
+
 void CheckUpdates() {
 	const auto url = GetBrand().json.value(u"downloads"_q).toString(u"https://cabinet.zjd.uk/app/downloads.json"_q);
 	const auto manager = new QNetworkAccessManager(qApp);
@@ -776,12 +890,13 @@ void CheckUpdates() {
 		const auto product = root.value(u"products"_q).toObject().value(GetBrand().product).toObject();
 		const auto latest = product.value(u"version"_q).toString();
 		const auto mine = GetBrand().json.value(u"version"_q).toString();
+		LOG(("Tgx: update check: mine %1, latest %2").arg(mine).arg(latest));
 		if (latest.isEmpty() || mine.isEmpty()) {
 			return;
 		}
 		const auto a = latest.split('.'), b = mine.split('.');
 		auto newer = false;
-		for (auto i = 0; i != std::max(a.size(), b.size()); ++i) {
+		for (auto i = 0; i != int(std::max(a.size(), b.size())); ++i) {
 			const auto x = (i < a.size()) ? a[i].toInt() : 0;
 			const auto y = (i < b.size()) ? b[i].toInt() : 0;
 			if (x != y) {
@@ -792,22 +907,45 @@ void CheckUpdates() {
 		if (!newer) {
 			return;
 		}
-		auto link = QString();
+		auto urls = QStringList();
+		auto name = QString();
+		auto sha = QString();
 		for (const auto &v : product.value(u"files"_q).toArray()) {
 			const auto f = v.toObject();
 			if (f.value(u"name"_q).toString().endsWith(u".exe"_q)) {
-				link = f.value(u"github"_q).toString(f.value(u"server"_q).toString());
+				name = f.value(u"name"_q).toString();
+				sha = f.value(u"sha256"_q).toString();
+				for (const auto key : { u"bucket"_q, u"server"_q, u"github"_q }) {   // the RU mirror first
+					const auto link = f.value(key).toString();
+					if (!link.isEmpty()) {
+						urls.push_back(link);
+					}
+				}
 				break;
 			}
 		}
-		if (link.isEmpty()) {
+		if (urls.isEmpty() || !name.contains(QRegularExpression(u"^[A-Za-z0-9._-]+\\.exe$"_q))) {
 			return;
 		}
+#ifdef Q_OS_WIN
+		if (qEnvironmentVariable("TGX_CI_AUTO_UPDATE") == u"1"_q) {   // the runner check cannot press our custom-drawn buttons
+			(new UpdateDownload(urls, name, sha))->start();
+			return;
+		}
+#endif // Q_OS_WIN
 		if (const auto window = Core::App().activePrimaryWindow()) {
 			window->show(Ui::MakeConfirmBox({
-				.text = GetBrand().name + u" "_q + latest + u"\n\n"_q + product.value(u"notes"_q).toString(),
-				.confirmed = [=](Fn<void()> close) { File::OpenUrl(link); close(); },
-				.confirmText = T("Скачать", "Download"),
+				.text = GetBrand().name + u" "_q + latest + u"\n\n"_q + product.value(u"notes"_q).toString()
+					+ u"\n\n"_q + T("Программа сама скачает обновление и перезапустится.", "The program downloads the update itself and restarts."),
+				.confirmed = [=](Fn<void()> close) {
+					close();
+#ifdef Q_OS_WIN
+					(new UpdateDownload(urls, name, sha))->start();
+#else // Q_OS_WIN
+					File::OpenUrl(urls[0]);
+#endif // Q_OS_WIN
+				},
+				.confirmText = T("Обновить", "Update"),
 				.cancelText = T("Позже", "Later"),
 				.title = T("Доступно обновление", "Update available"),
 			}));
