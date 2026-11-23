@@ -64,7 +64,8 @@ public class BypassActivity extends BaseFragment {
         final LinearLayout box = new LinearLayout(context);
         box.setOrientation(LinearLayout.VERTICAL);
         final int pad = AndroidUtilities.dp(18);
-        box.setPadding(pad, pad, pad, pad);
+        // edge-to-edge: nothing of ours under the navigation bar or the rounded corners of the screen
+        box.setPadding(pad, pad, pad, pad + AndroidUtilities.navigationBarHeight + AndroidUtilities.dp(24));
         scroll.addView(box);
 
         box.addView(text(context, Brand.t(

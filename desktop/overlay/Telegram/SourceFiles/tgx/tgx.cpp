@@ -457,7 +457,7 @@ QJsonObject Bypass::config(const QJsonArray &outbounds) const {
 	};
 	auto routing = QJsonObject{ { u"domainStrategy"_q, u"AsIs"_q } };
 	auto result = QJsonObject{
-		{ u"log"_q, QJsonObject{ { u"loglevel"_q, u"warning"_q } } },
+		{ u"log"_q, QJsonObject{ { u"loglevel"_q, u"warning"_q }, { u"access"_q, u"none"_q } } },
 		{ u"inbounds"_q, QJsonArray{ socks } },
 		{ u"outbounds"_q, outs },
 		{ u"dns"_q, QJsonObject{ { u"servers"_q, QJsonArray{ u"1.1.1.1"_q, u"8.8.8.8"_q, u"77.88.8.8"_q } } } },

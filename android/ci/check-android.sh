@@ -81,7 +81,7 @@ run_line() {   # run_line <apk> <tag> <expected alias> <expected label>
   local la
   la=$(adb shell cmd package query-activities --brief -a android.intent.action.MAIN -c android.intent.category.LAUNCHER $PKG 2>/dev/null | tr -d '\r' | grep -o "$PKG/[A-Za-z0-9_.]*" | head -3 | tr '\n' ' ')
   if echo "$la" | grep -q "$alias"; then ok "$tag: launcher entry $alias"; else bad "$tag: launcher entry is '$la', want $alias"; fi
-  adb shell am force-stop $PKG
+  adb shell pm clear $PKG >/dev/null 2>&1   # a fresh start: «direct first», not the bypass remembered by an earlier run
   adb logcat -c
   adb shell monkey -p $PKG -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1
   sleep 6

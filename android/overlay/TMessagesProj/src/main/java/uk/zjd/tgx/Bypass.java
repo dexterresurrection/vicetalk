@@ -618,7 +618,7 @@ public final class Bypass {
     /** SOCKS5 with login (other apps on the phone cannot use it), UDP for calls, least-ping balancer over all profiles. */
     static JSONObject config(ArrayList<JSONObject> obs) throws Exception {
         final JSONObject c = new JSONObject();
-        c.put("log", new JSONObject().put("loglevel", "warning"));
+        c.put("log", new JSONObject().put("loglevel", "warning").put("access", "none"));   // no list of visited hosts in the log
         final JSONObject socks = new JSONObject()
                 .put("tag", "in").put("listen", LOCAL).put("port", port).put("protocol", "socks")
                 .put("settings", new JSONObject().put("auth", "password").put("udp", true).put("ip", LOCAL)

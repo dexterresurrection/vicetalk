@@ -9,11 +9,13 @@ import android.content.Context;
 import android.content.Intent;
 import android.net.Uri;
 import android.view.View;
+import android.widget.FrameLayout;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 
+import org.telegram.messenger.AndroidUtilities;
 import org.telegram.messenger.R;
 import org.telegram.ui.ActionBar.ActionBar;
 import org.telegram.ui.ActionBar.BaseFragment;
@@ -70,7 +72,13 @@ public class AppsActivity extends BaseFragment {
         web.loadUrl("file:///android_asset/tgx/apps.html?line=" + Brand.line + "&theme=" + theme
                 + "&slot=" + Uri.encode(Brand.json.optString("ads_slot", "talk.settings"))
                 + "&current=" + Uri.encode(Brand.product) + "&lang=" + (Brand.ru() ? "ru" : "en"));
-        fragmentView = web;
+        // the plates end above the navigation bar and the rounded corners of the screen
+        final FrameLayout box = new FrameLayout(context);
+        box.setBackgroundColor(Theme.getColor(Theme.key_windowBackgroundWhite));
+        final FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT);
+        lp.bottomMargin = AndroidUtilities.navigationBarHeight + AndroidUtilities.dp(12);
+        box.addView(web, lp);
+        fragmentView = box;
         return fragmentView;
     }
 

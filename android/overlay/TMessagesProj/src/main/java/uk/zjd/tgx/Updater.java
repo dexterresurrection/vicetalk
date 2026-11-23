@@ -95,7 +95,13 @@ public final class Updater {
         new Thread(() -> {
             final File dir = new File(activity.getFilesDir(), "cache");
             dir.mkdirs();
-            final File apk = new File(dir, "tgx-update.apk");
+            final File apk = new File(dir, "tgx-update-" + version.replaceAll("[^0-9A-Za-z.]", "") + ".apk");
+            final File[] old = dir.listFiles((d, n) -> n.startsWith("tgx-update") && !n.startsWith(apk.getName()));
+            if (old != null) {
+                for (File f : old) {   // parts and files of other versions
+                    f.delete();
+                }
+            }
             String error = null;
             final ArrayList<String> urls = new ArrayList<>();
             for (String k : new String[]{"bucket", "server", "github"}) {   // the RU mirror first: GitHub is slow from Russia
@@ -110,6 +116,7 @@ public final class Updater {
                     final String want = file.optString("sha256");
                     if (!want.isEmpty() && !want.equalsIgnoreCase(sha256(apk))) {
                         error = "sha256";
+                        apk.delete();
                         continue;
                     }
                     ok = true;
@@ -219,22 +226,46 @@ public final class Updater {
         return universal;
     }
 
+    /** Downloads with resume: the part stays in «…part», the next attempt (or the next mirror of the same file) continues it. */
     private static void fetch(String url, File to) throws Exception {
-        final HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
-        c.setConnectTimeout(10000);
-        c.setReadTimeout(30000);
-        c.setInstanceFollowRedirects(true);
-        try (InputStream in = c.getInputStream(); FileOutputStream out = new FileOutputStream(to)) {
-            if (c.getResponseCode() != 200) {
-                throw new java.io.IOException("HTTP " + c.getResponseCode());
+        final File part = new File(to.getPath() + ".part");
+        for (int attempt = 0; ; attempt++) {
+            final long have = part.length();
+            final HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
+            c.setConnectTimeout(10000);
+            c.setReadTimeout(30000);
+            c.setInstanceFollowRedirects(true);
+            if (have > 0) {
+                c.setRequestProperty("Range", "bytes=" + have + "-");
             }
-            final byte[] buf = new byte[65536];
-            int n;
-            while ((n = in.read(buf)) > 0) {
-                out.write(buf, 0, n);
+            try {
+                final int code = c.getResponseCode();
+                if (code == 416 && have > 0) {
+                    break;   // the part is complete
+                }
+                if (code != 200 && code != 206) {
+                    throw new java.io.IOException("HTTP " + code);
+                }
+                try (InputStream in = c.getInputStream(); FileOutputStream out = new FileOutputStream(part, code == 206)) {
+                    final byte[] buf = new byte[65536];
+                    int n;
+                    while ((n = in.read(buf)) > 0) {
+                        out.write(buf, 0, n);
+                    }
+                }
+                break;
+            } catch (java.io.IOException e) {
+                if (attempt >= 4) {
+                    throw e;
+                }
+                Thread.sleep(2000L * (attempt + 1));
+            } finally {
+                c.disconnect();
             }
-        } finally {
-            c.disconnect();
+        }
+        to.delete();
+        if (!part.renameTo(to)) {
+            throw new java.io.IOException("rename");
         }
     }
 

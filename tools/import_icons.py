@@ -55,6 +55,11 @@ def main():
     # brand files: logos.py source, downloads images, Windows icons
     cp(f'{CLOUD}/png/{CPFX}-1024.png', f'{ROOT}/brand/cloud-1024.png')
     cp(f'{VICE}/png/vice-talk-1024.png', f'{ROOT}/brand/vice-1024.png')
+    # the logo of the first screen (Brand.introIcon): 512 px is enough for ICON_HEIGHT_DP = 150 dp at 3.5x
+    nod = f'{RES}/drawable-nodpi'
+    os.makedirs(nod, exist_ok=True)
+    Image.open(f'{CLOUD}/png/{CPFX}-1024.png').convert('RGBA').resize((512, 512), Image.LANCZOS).save(f'{nod}/tgx_logo_cloud.png')
+    Image.open(f'{VICE}/png/vice-talk-1024.png').convert('RGBA').resize((512, 512), Image.LANCZOS).save(f'{nod}/tgx_logo_vice.png')
     cp(f'{CLOUD}/{CPFX}.ico', f'{ROOT}/brand/cloud.ico')
     cp(f'{VICE}/vice-talk.ico', f'{ROOT}/brand/vice.ico')
     cp(f'{CLOUD}/png/{CPFX}-256.png', f'{ROOT}/brand/downloads/talk/icon.png')

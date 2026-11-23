@@ -200,11 +200,14 @@ def main():
                'uk.zjd.tgx.Brand.t("Обход блокировок", "Bypass"), uk.zjd.tgx.Bypass.statusLine()));\n'
                '        items.add(SettingCell.Factory.of(902, 0xFF2BD9FE, 0xFF7B2FF7, R.drawable.settings_features, '
                'uk.zjd.tgx.AppsActivity.title(), uk.zjd.tgx.Brand.t("Все приложения CloudVPN", "All CloudVPN apps")));\n'
+               '        items.add(SettingCell.Factory.of(903, 0xFFFF2BD6, 0xFFFF7A1A, R.drawable.settings_chat, '
+               'uk.zjd.tgx.Brand.t("Тема", "Theme"), uk.zjd.tgx.ThemePicker.currentName()));\n'
                '        items.add(UItem.asShadow(null));\n' + anchor)
     sa.replace('        switch (item.id) {\n            case 1:\n',
                '        switch (item.id) {\n'
                '            case 901:\n                presentSettingFragment(new uk.zjd.tgx.BypassActivity());\n                break;\n'
                '            case 902:\n                presentSettingFragment(new uk.zjd.tgx.AppsActivity());\n                break;\n'
+               '            case 903:\n                uk.zjd.tgx.ThemePicker.show(this);\n                break;\n'
                '            case 1:\n')
     sa.save()
 
@@ -213,6 +216,58 @@ def main():
     vs.replace('persistentStateFilePath, endpoints, null, getNetworkType(), encryptionKey, remoteSink[CAPTURE_DEVICE_CAMERA]',
                'persistentStateFilePath, endpoints, uk.zjd.tgx.Bypass.callProxy(), getNetworkType(), encryptionKey, remoteSink[CAPTURE_DEVICE_CAMERA]')
     vs.save()
+
+    # ---- themes of the Vice line (assets/vice_*.attheme, tools/make_themes.py) among the built-in ones
+    th = Src(up, 'TMessagesProj/src/main/java/org/telegram/ui/ActionBar/Theme.java')
+    th.replace('        themes.add(themeInfo);\n        themesDict.put("Night", themeInfo);\n', '''        themes.add(themeInfo);
+        themesDict.put("Night", themeInfo);
+
+        themeInfo = new ThemeInfo();
+        themeInfo.name = "Vice Night";
+        themeInfo.assetName = "vice_night.attheme";
+        themeInfo.previewBackgroundColor = 0xff160A3D;
+        themeInfo.previewInColor = 0xff22105C;
+        themeInfo.previewOutColor = 0xffB81F9B;
+        themeInfo.sortIndex = 5;
+        themes.add(themeInfo);
+        themesDict.put("Vice Night", themeInfo);
+
+        themeInfo = new ThemeInfo();
+        themeInfo.name = "Vice Day";
+        themeInfo.assetName = "vice_day.attheme";
+        themeInfo.previewBackgroundColor = 0xffFFF4FA;
+        themeInfo.previewInColor = 0xffffffff;
+        themeInfo.previewOutColor = 0xffD4116F;
+        themeInfo.sortIndex = 6;
+        themes.add(themeInfo);
+        themesDict.put("Vice Day", themeInfo);
+''')
+    th.replace('if ("Dark Blue".equals(name) || "Night".equals(name)) {\n                isDark = DARK;',
+               'if ("Dark Blue".equals(name) || "Night".equals(name) || "Vice Night".equals(name)) {\n                isDark = DARK;')
+    th.replace('"Blue".equals(name) || "Arctic Blue".equals(name) || "Day".equals(name)) {\n                isDark = LIGHT;',
+               '"Blue".equals(name) || "Arctic Blue".equals(name) || "Day".equals(name) || "Vice Day".equals(name)) {\n                isDark = LIGHT;')
+    th.replace('''            } else if ("Night".equals(name)) {
+                return getString(R.string.ThemeNight);
+            }''', '''            } else if ("Night".equals(name)) {
+                return getString(R.string.ThemeNight);
+            } else if ("Vice Night".equals(name)) {
+                return uk.zjd.tgx.Brand.t("Vice ночь", "Vice Night");
+            } else if ("Vice Day".equals(name)) {
+                return uk.zjd.tgx.Brand.t("Vice день", "Vice Day");
+            }''')
+    th.save()
+
+    # ---- first screen: our icon instead of Telegram's blue circle with the plane, the app name instead of the wordmark
+    ia = Src(up, 'TMessagesProj/src/main/java/org/telegram/ui/IntroActivity.java')
+    ia.replace('''        SpannableStringBuilder ssb = new SpannableStringBuilder(LocaleController.getString(R.string.Page1Title));
+        ssb.setSpan(new ImageSpan(logoDrawable), 0, ssb.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        titles[0] = ssb;
+''', '''        titles[0] = uk.zjd.tgx.Brand.name;
+''')
+    start = ia.text.index('            loadTexture(v -> {\n                Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);\n                paint.setColor(ThemeColors.TELEGRAM_COLOR);')
+    end = ia.text.index('            }, 22);', start) + len('            }, 22);')
+    ia.text = ia.text[:start] + '            loadTexture(v -> uk.zjd.tgx.Brand.introIcon(dp(ICON_HEIGHT_DP)), 22);' + ia.text[end:]
+    ia.save()
 
     # ---- updates from our downloads.json
     ai = Src(up, 'TMessagesProj_AppStandalone/src/main/java/org/telegram/messenger/ApplicationLoaderImpl.java')

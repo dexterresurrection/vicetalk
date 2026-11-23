@@ -65,7 +65,7 @@ def main():
                 if base == 'notification':
                     img = cloud_silhouette(w, 0.06)
                 elif base == 'intro_tg_plane':
-                    img = cloud_silhouette(w, 0.18)
+                    img = Image.new('RGBA', (w, h), (0, 0, 0, 0))   # the icon is drawn by Brand.introIcon
                 else:
                     img = icon(w, False, round_=('round' in base))
                 if (w, h) != img.size:

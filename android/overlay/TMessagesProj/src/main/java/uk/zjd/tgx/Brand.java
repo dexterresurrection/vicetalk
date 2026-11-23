@@ -5,6 +5,13 @@
 package uk.zjd.tgx;
 
 import android.content.Context;
+import android.content.SharedPreferences;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.graphics.Canvas;
+import android.graphics.Paint;
+import android.graphics.Rect;
+import android.graphics.RectF;
 import android.text.TextUtils;
 
 import org.json.JSONArray;
@@ -57,6 +64,44 @@ public final class Brand {
             BuildVars.APP_ID = id;
             BuildVars.APP_HASH = hash;
         }
+        defaultTheme(ctx);
+    }
+
+    /** The theme of the line until the person chooses one; after switching the line the other line's theme applies. */
+    private static void defaultTheme(Context ctx) {
+        final SharedPreferences main = ctx.getSharedPreferences("mainconfig", Context.MODE_PRIVATE);
+        final SharedPreferences own = ctx.getSharedPreferences("tgx_brand", Context.MODE_PRIVATE);
+        final String before = own.getString("line", null);
+        if (line.equals(before)) {
+            return;
+        }
+        own.edit().putString("line", line).apply();
+        final boolean chosen = main.contains("theme") && before == null || own.getBoolean("theme_chosen", false);
+        if (chosen) {
+            return;
+        }
+        if (isVice()) {
+            main.edit().putString("theme", "Vice Night").putString("nighttheme", "Vice Night").apply();
+        } else if (before != null) {
+            main.edit().putString("theme", "Blue").putString("nighttheme", "Dark Blue").apply();
+        }
+    }
+
+    /** First screen: our icon (inside Telegram's circle mask, nothing of Telegram's logo). */
+    public static Bitmap introIcon(int size) {
+        final Bitmap out = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
+        try {
+            final int res = isVice() ? R.drawable.tgx_logo_vice : R.drawable.tgx_logo_cloud;
+            final Bitmap src = BitmapFactory.decodeResource(org.telegram.messenger.ApplicationLoader.applicationContext.getResources(), res);
+            if (src != null) {
+                final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
+                final float m = size * .14f;   // inside the circle: the corners of the square icon stay visible
+                new Canvas(out).drawBitmap(src, new Rect(0, 0, src.getWidth(), src.getHeight()), new RectF(m, m, size - m, size - m), p);
+                src.recycle();
+            }
+        } catch (Throwable ignore) {
+        }
+        return out;
     }
 
     public static boolean isVice() {
