@@ -19,6 +19,7 @@ Licensed under GNU GPL v3 with the OpenSSL exception, like Telegram Desktop.
 #include <QtCore/QDateTime>
 #include <QtCore/QDir>
 #include <QtCore/QFile>
+#include <QtCore/QFileInfo>
 #include <QtCore/QJsonDocument>
 #include <QtCore/QLocale>
 #include <QtCore/QProcess>
@@ -47,7 +48,21 @@ constexpr auto kProbeEvery = crl::time(30 * 60 * 1000);
 const auto kLocal = QString::fromLatin1("127.0.0.1");
 
 QString ExeDir() {
-	return QCoreApplication::applicationDirPath() + '/';
+	// the brand is read before QApplication exists (AppName, ApiId): ask the system, not Qt
+	static const auto result = [] {
+#ifdef Q_OS_WIN
+		auto buffer = std::vector<wchar_t>(32768);
+		const auto n = GetModuleFileNameW(nullptr, buffer.data(), DWORD(buffer.size()));
+		const auto path = QString::fromWCharArray(buffer.data(), int(n));
+#else // Q_OS_WIN
+		const auto path = QFileInfo(QString::fromLatin1("/proc/self/exe")).symLinkTarget();
+#endif // Q_OS_WIN
+		const auto dir = path.isEmpty()
+			? QCoreApplication::applicationDirPath()
+			: QFileInfo(path).absolutePath();
+		return dir + '/';
+	}();
+	return result;
 }
 
 QString StateDir() {

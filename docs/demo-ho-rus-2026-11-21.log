@@ -1,0 +1,60 @@
+===== mode off
+[2026.11.21 02:19:09] Tgx: brand cloud, api set, mode 2
+[2026.11.21 02:19:11] Tgx: telegram state 1 (direct)
+[2026.11.21 02:19:12] Tgx: telegram state 0 (direct)
+[2026.11.21 02:19:12] Tgx: telegram state 1 (direct)
+[2026.11.21 02:19:14] Tgx: telegram state 0 (direct)
+[2026.11.21 02:19:14] Tgx: telegram state 1 (direct)
+[2026.11.21 02:19:18] Tgx: telegram state 0 (direct)
+[2026.11.21 02:19:18] Tgx: telegram state 1 (direct)
+[2026.11.21 02:19:26] Tgx: telegram state 0 (direct)
+[2026.11.21 02:19:26] Tgx: telegram state 1 (direct)
+[2026.11.21 02:19:34] Tgx: telegram state 0 (direct)
+[2026.11.21 02:19:34] Tgx: telegram state 1 (direct)
+[2026.11.21 02:19:42] Tgx: telegram state 0 (direct)
+[2026.11.21 02:19:42] Tgx: telegram state 1 (direct)
+[2026.11.21 02:19:50] Tgx: telegram state 0 (direct)
+[2026.11.21 02:19:50] Tgx: telegram state 1 (direct)
+[2026.11.21 02:19:58] Tgx: telegram state 0 (direct)
+[2026.11.21 02:19:58] Tgx: telegram state 1 (direct)
+[2026.11.21 02:20:02] Tgx: telegram state 2 (direct)
+[2026.11.21 02:20:06] Tgx: telegram state 0 (direct)
+[2026.11.21 02:20:06] Tgx: telegram state 1 (direct)
+[2026.11.21 02:20:07] Tgx: telegram state 0 (direct)
+[2026.11.21 02:20:07] Tgx: telegram state 1 (direct)
+[2026.11.21 02:20:09] Tgx: telegram state 0 (direct)
+[2026.11.21 02:20:09] Tgx: telegram state 1 (direct)
+[2026.11.21 02:20:13] Tgx: telegram state 0 (direct)
+[2026.11.21 02:20:13] Tgx: telegram state 1 (direct)
+[2026.11.21 02:20:21] Tgx: telegram state 0 (direct)
+[2026.11.21 02:20:21] Tgx: telegram state 1 (direct)
+[2026.11.21 02:20:30] Tgx: telegram state 0 (direct)
+===== mode auto
+[2026.11.21 02:20:45] Tgx: brand cloud, api set, mode 0
+[2026.11.21 02:20:46] Tgx: telegram state 1 (direct)
+[2026.11.21 02:20:47] Tgx: telegram state 0 (direct)
+[2026.11.21 02:20:47] Tgx: telegram state 1 (direct)
+[2026.11.21 02:20:49] Tgx: telegram state 0 (direct)
+[2026.11.21 02:20:49] Tgx: telegram state 1 (direct)
+[2026.11.21 02:20:53] Tgx: telegram state 0 (direct)
+[2026.11.21 02:20:53] Tgx: telegram state 1 (direct)
+[2026.11.21 02:20:55] Tgx: enable: auto: no direct connection for 8 s
+[2026.11.21 02:20:55] Tgx: xray: Xray 26.11.9 (Xray, Penetrates Everything.) 676eaf6 (go1.27.3 linux/amd64)
+[2026.11.21 02:20:55] Tgx: xray: A unified platform for anti-censorship.
+[2026.11.21 02:20:55] Tgx: xray: 2026/11/21 02:20:55.536170 [Info] infra/conf/serial: Reading config: &{Name:/wd/tdata/tgx/xray.json Format:json}
+[2026.11.21 02:20:55] Tgx: xray: 2026/11/21 02:20:55.540240 [Warning] core: Xray 26.11.9 started
+[2026.11.21 02:20:55] Tgx: xray up on 38912, outbounds 1
+[2026.11.21 02:20:55] Tgx: telegram state 0 (bypass)
+[2026.11.21 02:20:55] Tgx: telegram state -1 (bypass)
+[2026.11.21 02:20:55] Tgx: telegram state 1 (bypass)
+[2026.11.21 02:20:55] Tgx: xray: 2026/11/21 02:20:55.622122 from tcp:127.0.0.1:55158 accepted tcp:[2001:b28:f23d:f003::a]:443 [in -> px-0]
+[2026.11.21 02:20:55] Tgx: xray: 2026/11/21 02:20:55.622135 from tcp:127.0.0.1:55152 accepted tcp:149.154.175.100:443 [in -> px-0]
+[2026.11.21 02:20:55] Tgx: xray: 2026/11/21 02:20:55.622499 from tcp:127.0.0.1:55160 accepted tcp:149.154.175.100:80 [in -> px-0]
+[2026.11.21 02:20:55] Tgx: xray: 2026/11/21 02:20:55.622755 from tcp:127.0.0.1:55202 accepted tcp:95.161.76.100:80 [in -> px-0]
+[2026.11.21 02:20:55] Tgx: xray: 2026/11/21 02:20:55.623111 from tcp:127.0.0.1:55172 accepted tcp:95.161.76.100:443 [in -> px-0]
+[2026.11.21 02:20:55] Tgx: xray: 2026/11/21 02:20:55.623124 from tcp:127.0.0.1:55170 accepted tcp:149.154.167.51:443 [in -> px-0]
+[2026.11.21 02:20:55] Tgx: xray: 2026/11/21 02:20:55.623126 from tcp:127.0.0.1:55188 accepted tcp:194.221.250.50:443 [in -> px-0]
+[2026.11.21 02:20:55] Tgx: xray: 2026/11/21 02:20:55.623128 from tcp:127.0.0.1:55180 accepted tcp:[2001:67c:4e8:f002::a]:443 [in -> px-0]
+[2026.11.21 02:20:55] Tgx: xray: 2026/11/21 02:20:55.623129 from tcp:127.0.0.1:55192 accepted tcp:149.154.167.51:80 [in -> px-0]
+[2026.11.21 02:20:58] Tgx: telegram state 2 (bypass)
+[2026.11.21 02:21:00] Tgx: xray: 2026/11/21 02:21:00.020500 from tcp:127.0.0.1:55212 accepted tcp:cabinet.zjd.uk:443 [in -> px-0]

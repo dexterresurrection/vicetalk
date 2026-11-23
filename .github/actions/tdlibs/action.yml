@@ -11,26 +11,33 @@ inputs:
 runs:
   using: composite
   steps:
-    - name: dirs
-      shell: cmd
+    - name: drive with the most room, unused preinstalled software off the disk
+      shell: pwsh
       run: |
-        mkdir %userprofile%\TBuild\Libraries\win64
-        mklink /d %GITHUB_WORKSPACE%\TBuild %userprofile%\TBuild
-        echo TBUILD=%GITHUB_WORKSPACE%\TBuild>>%GITHUB_ENV%
-        echo LibrariesPath=%GITHUB_WORKSPACE%\TBuild\Libraries\win64>>%GITHUB_ENV%
+        Get-PSDrive -PSProvider FileSystem | Select-Object Name, @{n='FreeGB';e={[math]::Round($_.Free/1GB)}}, @{n='UsedGB';e={[math]::Round($_.Used/1GB)}} | Out-String | Write-Host
+        foreach ($d in 'C:\Android', 'C:\hostedtoolcache\windows\CodeQL', 'C:\hostedtoolcache\windows\go', 'C:\hostedtoolcache\windows\Ruby',
+                       'C:\hostedtoolcache\windows\stack', 'C:\hostedtoolcache\windows\PyPy', 'C:\hostedtoolcache\windows\node',
+                       'C:\ghcup', 'C:\cabal', 'C:\Miniconda', 'C:\SeleniumWebDrivers', 'C:\Program Files\MongoDB', 'C:\Program Files\MySQL',
+                       'C:\Program Files\PostgreSQL', 'C:\Program Files\R', 'C:\Program Files\Google', 'C:\vcpkg', 'C:\tools\php') {
+          if (Test-Path $d) { cmd /c rmdir /S /Q "$d" 2>$null }
+        }
+        # the build drive must be the same in every job (absolute paths are inside .pc/.cmake files)
+        $d = 'C'
+        $dd = Get-PSDrive D -ErrorAction SilentlyContinue
+        if ($dd -and $dd.Free -gt 60GB -and $dd.Free -gt (Get-PSDrive C).Free) { $d = 'D' }
+        New-Item -ItemType Directory -Force "${d}:\TBuild\Libraries\win64" | Out-Null
+        cmd /c mklink /d "$env:GITHUB_WORKSPACE\TBuild" "${d}:\TBuild"
+        "TBUILD=$env:GITHUB_WORKSPACE\TBuild" >> $env:GITHUB_ENV
+        "LibrariesPath=$env:GITHUB_WORKSPACE\TBuild\Libraries\win64" >> $env:GITHUB_ENV
+        Get-PSDrive -PSProvider FileSystem | Select-Object Name, @{n='FreeGB';e={[math]::Round($_.Free/1GB)}} | Out-String | Write-Host
+        Write-Host "build drive: ${d}:"
     - name: sources
       shell: bash
       run: |
         # prepare.py also reads files of the submodules (cmake/external/…)
         git clone -q --recursive --shallow-submodules --depth 1 -b "$TD_TAG" https://github.com/telegramdesktop/tdesktop.git "$TBUILD/tdesktop"
         sed -i '/CMAKE_${lang}_FLAGS_DEBUG_INIT/s/${_Zi}//' "$PROGRAMFILES"/CMake/share/cmake*/Modules/Platform/Windows-MSVC.cmake || true
-        # crash reports are off in our builds (DESKTOP_APP_DISABLE_CRASH_REPORTS=ON): no breakpad/crashpad, which also
-        # need ATL that the 14.44 toolset of the runner image lacks
-        P="$TBUILD/tdesktop/Telegram/build/prepare/prepare.py"
-        sed -i "s/^stage('breakpad', \"\"\"/if False: stage('breakpad', \"\"\"/; s/^stage('crashpad', \"\"\"/if False: stage('crashpad', \"\"\"/" "$P"
-        grep -n "if False: stage" "$P"
-        git config --global user.email "ci@example.com"
-        git config --global user.name "CI"
+        python talk/desktop/ci/patch_prepare.py "$TBUILD/tdesktop/Telegram/build/prepare/prepare.py"
     - uses: Eden-CI/msvc-dev-cmd@master
       with:
         arch: x64
@@ -80,13 +87,14 @@ runs:
     - name: free up disk (keep libraries, headers, cache keys)
       shell: bash
       run: |
-        find $LibrariesPath '(' '(' ! '(' -name '*.lib' -o -name '*.a' -o -name '*.exe' -o -name '*.h' -o -name '*.hpp' -o -name '*.inc' -o -name '*.cmake' -o -name '*.pc' -o -path '*/include/*' -o -path '*/objects-*' -o -path '*/cache_keys/*' -o -path '*/patches/*' -o -path '*/nv-codec-headers/*' -o -name '*.rs' -o -name '*.toml' -o -name '*.json' -o -name '*.py' -o -name '*.def' -o -name '*.natvis' -o -name '*.pdb' ')' -type f ')' -o -empty ')' -delete || true
+        find $LibrariesPath '(' '(' ! '(' -name '*.lib' -o -name '*.a' -o -name '*.exe' -o -name '*.h' -o -name '*.hpp' -o -name '*.inc' -o -name '*.cmake' -o -name '*.pc' -o -path '*/include/*' -o -path '*/objects-*' -o -path '*/cache_keys/*' -o -path '*/patches/*' -o -path '*/nv-codec-headers/*' -o -name '*.rs' -o -name '*.toml' -o -name '*.json' -o -name '*.py' -o -name '*.def' -o -name '*.natvis' ')' -type f ')' -o -empty ')' -delete || true
         du -sh "$LibrariesPath" || true
     - name: pack libraries
       if: inputs.build != 'true'
       shell: bash
       run: |
         mkdir -p libs-out
+        df -h "$LibrariesPath" | tail -1
         cd "$LibrariesPath" && 7z a -mx=1 -bso0 -bsp0 "$GITHUB_WORKSPACE/libs-out/Libraries.7z" . && ls -la "$GITHUB_WORKSPACE/libs-out"
     - uses: actions/upload-artifact@v4
       if: inputs.build != 'true'

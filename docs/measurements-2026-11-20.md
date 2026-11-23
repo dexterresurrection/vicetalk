@@ -57,3 +57,14 @@ bypass is on (TCP relays through the tunnel). Telegram Desktop: «use proxy for 
 - In this network Telegram does not work directly at all; both our xray tunnel and 4 of our MTProto proxies work.
 - xray is the primary bypass (also carries calls and is not tied to Telegram's MTProxy protocol, which RKN can
   fingerprint); our MTProto proxies are the built-in fallback in the proxy list with Telegram's own rotation.
+
+## The client itself from Russia (2026-11-21)
+
+The Linux build of Cloud Talk desktop (same patch as Windows, CI run 44802321626) under Xvfb on ho-rus, test
+bypass server on innon, Telegram Desktop development keys (demo only). Log: `demo-ho-rus-2026-11-21.log`.
+
+- mode «off» (direct only): 80 s of «connecting» (state 0/1), one connection at 02:20:02 that dropped at once;
+- mode «auto»: 8 s without a direct connection → bypass on → xray up → **connected (state 2) 3 s later**;
+  the xray log shows the Telegram data centers (149.154.175.100, 149.154.167.51, 95.161.76.100, IPv6 DCs) through
+  the tunnel. The demo also found a bug that is fixed now: the desktop client read brand.json/talk.json before
+  QApplication existed, so the keys were not picked up from the executable's folder (15cdb35).
