@@ -77,8 +77,10 @@ update_check() {   # C. in-app update: old build 0.0.9 → the newer build from 
   adb logcat -c
   adb shell monkey -p $PKG -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1
   if l=$(wait_log "update: mine 0\.0\.9, latest $newver" 90); then ok "update: the app sees $newver in downloads.json"; else bad "update: no update check"; return; fi
-  if tap_text "(update|обновить)" 30; then ok "update: «Update» tapped in the update dialog"; else bad "update: no update dialog"; shot update-dialog; return; fi
-  if wait_log "update: downloaded" 90 >/dev/null; then ok "update: APK downloaded inside the app, sha256 checked"; else bad "update: download"; return; fi
+  if l=$(wait_log "update: offer $newver shown: true" 60); then ok "update: the offer is on screen"; else bad "update: the offer was not shown"; fi
+  if tap_text "(update|обновить)" 60; then ok "update: «Update» tapped in the update dialog"; else bad "update: no update dialog"; shot update-dialog; return; fi
+  sleep 5; shot update-progress
+  if wait_log "update: downloaded" 300 >/dev/null; then ok "update: APK downloaded inside the app, sha256 checked"; else bad "update: download"; return; fi
   if wait_log "asked for the install permission" 8 >/dev/null; then
     shot update-permission
     if tap_text "(allow from this source|разрешить установку из этого источника)" 20; then ok "update: install permission given in Settings"; else
@@ -127,6 +129,7 @@ run_line() {   # run_line <apk> <tag> <expected alias> <expected label>
 }
 
 update_check
+adb logcat -d -v time > "$R/update-logcat.txt" 2>/dev/null
 run_line ci/cloud.apk cloud DefaultIcon "Cloud Talk"
 n=$(sudo grep -cE '(149\.154\.|91\.108\.)[0-9.]+:(443|80|5222)' /opt/xr/access.log 2>/dev/null || echo 0)
 if [ "${n:-0}" -gt 0 ]; then ok "test server: $n connections to Telegram data centers went through it"; else bad "test server: no Telegram connections in its log"; fi

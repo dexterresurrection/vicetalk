@@ -80,10 +80,14 @@ public final class Brand {
         if (chosen) {
             return;
         }
+        final SharedPreferences cfg = ctx.getSharedPreferences("themeconfig", Context.MODE_PRIVATE);
         if (isVice()) {
-            main.edit().putString("theme", "Vice Night").putString("nighttheme", "Vice Night").apply();
+            // «follow the system» (Telegram's default since Android 10) replaces a dark day theme by the stock light one
+            main.edit().putString("theme", "Vice Night").putString("nighttheme", "Vice Night").putInt("selectedAutoNightType", 0).apply();
+            cfg.edit().putString("lastDayTheme", "Vice Day").putString("lastDarkTheme", "Vice Night").apply();   // the day/night switch
         } else if (before != null) {
-            main.edit().putString("theme", "Blue").putString("nighttheme", "Dark Blue").apply();
+            main.edit().putString("theme", "Blue").putString("nighttheme", "Dark Blue").remove("selectedAutoNightType").apply();
+            cfg.edit().putString("lastDayTheme", "Blue").putString("lastDarkTheme", "Dark Blue").apply();
         }
     }
 

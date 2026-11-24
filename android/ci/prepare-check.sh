@@ -60,6 +60,15 @@ python3 tools/brand_apk.py --in ci/cloud.apk --out ci/vice.apk --keystore-props 
   --enable ViceIcon --disable DefaultIcon --label alias
 python3 tools/brand_apk.py --in out/CloudTalk-old-unsigned-ci.apk --out ci/old.apk --keystore-props ci/ci.properties --brand "$CLOUD" --any-cert
 
+# ---- names as the launcher and the system show them (Telegram's build strips strings out of the resource table)
+for pair in "cloud:Cloud Talk" "vice:Vice Talk"; do
+  f=${pair%%:*}; want=${pair#*:}
+  "$ANDROID_HOME/build-tools/$BT/aapt2" dump badging "ci/$f.apk" > "results/badging-$f.txt" 2>/dev/null || true
+  app=$(sed -n "s/^application: label='\([^']*\)'.*/\1/p" "results/badging-$f.txt" | head -1)
+  act=$(sed -n "s/^launchable-activity: .* label='\([^']*\)'.*/\1/p" "results/badging-$f.txt" | head -1)
+  if [ "$app" = "$want" ] && [ "$act" = "$want" ]; then echo "OK   $f: app and launcher name «$want»"; else echo "FAIL $f: app name '$app', launcher name '$act', want «$want»"; fi
+done | tee -a results/host.txt
+
 # ---- update server for the in-app update check: downloads.json → ci/cloud.apk (the newer build)
 NEWVER=$(cat VERSION)
 SHA=$(sha256sum ci/cloud.apk | cut -d' ' -f1)

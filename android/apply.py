@@ -158,6 +158,11 @@ def main():
             s.replace('<string name="AppNameBeta">', f'<string name="AppNameVice">{VICE_NAME}</string>\n    <string name="AppNameBeta">')
         s.save()
 
+    # Telegram's build moves every string out of the resource table except these: the launcher needs the Vice name there
+    ts = Src(up, 'buildSrc/src/main/kotlin/org/telegram/tasks/TelegramStringsTask.kt')
+    ts.replace('            "AppName",\n', '            "AppName",\n            "AppNameVice",\n', count=2)
+    ts.save()
+
     # ---- launcher: Cloud alias (DefaultIcon) and Vice alias; tools/brand_apk.py swaps them in the Vice APK
     mf = Src(up, 'TMessagesProj/src/main/AndroidManifest.xml')
     mf.replace('            android:name="org.telegram.messenger.DefaultIcon"\n            android:targetActivity="org.telegram.ui.LaunchActivity"\n',
@@ -267,6 +272,11 @@ def main():
     start = ia.text.index('            loadTexture(v -> {\n                Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);\n                paint.setColor(ThemeColors.TELEGRAM_COLOR);')
     end = ia.text.index('            }, 22);', start) + len('            }, 22);')
     ia.text = ia.text[:start] + '            loadTexture(v -> uk.zjd.tgx.Brand.introIcon(dp(ICON_HEIGHT_DP)), 22);' + ia.text[end:]
+    # the icon is drawn on the page colour: drawn again when the theme changes; the sun/moon button keeps the line's themes
+    ia.sub(r'( +)(eglThread\.loadTexture\(eglThread\.telegramMaskProvider, 23, true\);)',
+           r'\1eglThread.loadTexture(v -> uk.zjd.tgx.Brand.introIcon(dp(ICON_HEIGHT_DP)), 22, true);\n\1\2', min_count=2)
+    ia.replace('String dayThemeName = "Blue";', 'String dayThemeName = uk.zjd.tgx.Brand.isVice() ? "Vice Day" : "Blue";')
+    ia.replace('String nightThemeName = "Night";', 'String nightThemeName = uk.zjd.tgx.Brand.isVice() ? "Vice Night" : "Night";')
     ia.save()
 
     # ---- updates from our downloads.json

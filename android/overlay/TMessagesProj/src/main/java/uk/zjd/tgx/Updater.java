@@ -5,11 +5,13 @@
 package uk.zjd.tgx;
 
 import android.app.Activity;
+import android.app.Application;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.net.Uri;
 import android.os.Build;
+import android.os.Bundle;
 import android.provider.Settings;
 
 import androidx.core.content.FileProvider;
@@ -22,11 +24,13 @@ import org.telegram.ui.ActionBar.AlertDialog;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStream;
+import java.lang.ref.WeakReference;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Locale;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * In-app updates from our downloads.json (same file as the bot «📲 Приложения» and the cabinet), product = brand.json
@@ -35,13 +39,28 @@ import java.util.Locale;
  */
 public final class Updater {
     private static final String DEFAULT = "https://cabinet.zjd.uk/app/downloads.json";
-    private static boolean checking;
+    private static volatile boolean checking;
+    private static boolean watching;
+    private static JSONObject pending;   // the offer waiting for an answer (UI thread)
+    private static String pendingVersion = "", pendingNotes = "";
+    private static AlertDialog dialog;
+    private static WeakReference<Activity> current = new WeakReference<>(null), shownOn = new WeakReference<>(null);
+
+    private interface Progress {
+        void on(int percent);
+    }
 
     private Updater() {
     }
 
+    /** Called from LaunchActivity.onCreate; an offer that was not answered (the activity was recreated) is shown again. */
     public static void check(Activity activity, boolean force) {
-        if (activity == null || checking) {
+        if (activity == null) {
+            return;
+        }
+        current = new WeakReference<>(activity);
+        watch(activity.getApplication());
+        if (checking || pending != null) {
             return;
         }
         final SharedPreferences p = activity.getSharedPreferences("tgx_update", Context.MODE_PRIVATE);
@@ -49,36 +68,25 @@ public final class Updater {
             return;
         }
         checking = true;
+        final Context c = activity.getApplicationContext();
         new Thread(() -> {
             try {
                 final String url = Brand.json.optString("downloads", DEFAULT);
                 final JSONObject d = new JSONObject(get(url));
                 final JSONObject prod = d.getJSONObject("products").optJSONObject(Brand.product);
-                p.edit().putLong("at", System.currentTimeMillis()).apply();
-                if (prod == null) {
-                    return;
-                }
-                final String latest = prod.optString("version");
-                final String mine = activity.getPackageManager().getPackageInfo(activity.getPackageName(), 0).versionName;
+                final String latest = prod != null ? prod.optString("version") : "";
+                final String mine = c.getPackageManager().getPackageInfo(c.getPackageName(), 0).versionName;
                 Bypass.note("update: mine " + ourVersion(mine) + ", latest " + latest);
-                if (!newer(latest, ourVersion(mine)) || (!force && latest.equals(p.getString("skip", "")))) {
-                    return;
-                }
-                final JSONObject file = pickFile(prod.optJSONArray("files"));
-                if (file == null) {
+                final JSONObject file = prod != null ? pickFile(prod.optJSONArray("files")) : null;
+                if (file == null || !newer(latest, ourVersion(mine)) || (!force && latest.equals(p.getString("skip", "")))) {
+                    p.edit().putLong("at", System.currentTimeMillis()).apply();
                     return;
                 }
                 AndroidUtilities.runOnUIThread(() -> {
-                    if (activity.isFinishing()) {
-                        return;
-                    }
-                    new AlertDialog.Builder(activity)
-                            .setTitle(Brand.t("Доступно обновление", "Update available"))
-                            .setMessage(Brand.name + " " + latest + (prod.optString("notes").isEmpty() ? "" : "\n\n" + prod.optString("notes")))
-                            .setPositiveButton(Brand.t("Обновить", "Update"), (dlg, w) -> download(activity, file, latest))
-                            .setNegativeButton(Brand.t("Позже", "Later"), null)
-                            .setNeutralButton(Brand.t("Пропустить", "Skip"), (dlg, w) -> p.edit().putString("skip", latest).apply())
-                            .show();
+                    pending = file;
+                    pendingVersion = latest;
+                    pendingNotes = prod.optString("notes");
+                    showPending();
                 });
             } catch (Throwable e) {
                 Bypass.note("update check: " + e.getClass().getSimpleName());
@@ -88,12 +96,102 @@ public final class Updater {
         }, "tgx-update").start();
     }
 
-    private static void download(Activity activity, JSONObject file, String version) {
-        final AlertDialog progress = new AlertDialog(activity, AlertDialog.ALERT_TYPE_SPINNER);
-        progress.setCanCancel(false);
+    private static void watch(Application app) {
+        if (watching || app == null) {
+            return;
+        }
+        watching = true;
+        app.registerActivityLifecycleCallbacks(new Application.ActivityLifecycleCallbacks() {
+            @Override
+            public void onActivityResumed(Activity a) {
+                if (a instanceof org.telegram.ui.LaunchActivity) {
+                    current = new WeakReference<>(a);
+                    AndroidUtilities.runOnUIThread(Updater::showPending, 300);
+                }
+            }
+
+            @Override
+            public void onActivityCreated(Activity a, Bundle b) {
+            }
+
+            @Override
+            public void onActivityStarted(Activity a) {
+            }
+
+            @Override
+            public void onActivityPaused(Activity a) {
+            }
+
+            @Override
+            public void onActivityStopped(Activity a) {
+            }
+
+            @Override
+            public void onActivitySaveInstanceState(Activity a, Bundle b) {
+            }
+
+            @Override
+            public void onActivityDestroyed(Activity a) {
+            }
+        });
+    }
+
+    private static boolean alive(Activity a) {
+        return a != null && !a.isFinishing() && !a.isDestroyed();
+    }
+
+    /** UI thread. */
+    private static void showPending() {
+        final Activity a = current.get();
+        if (pending == null || !alive(a) || (shownOn.get() == a && dialog != null && dialog.isShowing())) {
+            return;   // shown again when the activity resumes
+        }
+        final JSONObject file = pending;
+        final String version = pendingVersion;
+        final SharedPreferences p = a.getSharedPreferences("tgx_update", Context.MODE_PRIVATE);
+        try {
+            dialog = new AlertDialog.Builder(a)
+                    .setTitle(Brand.t("Доступно обновление", "Update available"))
+                    .setMessage(Brand.name + " " + version + (pendingNotes.isEmpty() ? "" : "\n\n" + pendingNotes))
+                    .setPositiveButton(Brand.t("Обновить", "Update"), (dlg, w) -> {
+                        answered(p);
+                        download(file, version);
+                    })
+                    .setNegativeButton(Brand.t("Позже", "Later"), (dlg, w) -> answered(p))
+                    .setNeutralButton(Brand.t("Пропустить", "Skip"), (dlg, w) -> {
+                        answered(p);
+                        p.edit().putString("skip", version).apply();
+                    })
+                    .setOnCancelListener(d -> answered(p))
+                    .show();
+            shownOn = new WeakReference<>(a);
+            Bypass.note("update: offer " + version + " shown: " + dialog.isShowing());
+        } catch (Throwable e) {
+            Bypass.note("update: offer " + e.getClass().getSimpleName());
+        }
+    }
+
+    private static void answered(SharedPreferences p) {
+        pending = null;
+        p.edit().putLong("at", System.currentTimeMillis()).apply();
+    }
+
+    private static void download(JSONObject file, String version) {
+        final Activity activity = current.get();
+        if (!alive(activity)) {
+            return;
+        }
+        final AtomicBoolean stop = new AtomicBoolean();
+        final AlertDialog progress = new AlertDialog(activity, AlertDialog.ALERT_TYPE_LOADING);
+        progress.setTitle(Brand.t("Обновление", "Update"));
+        progress.setMessage(Brand.name + " " + version);
+        progress.setCanceledOnTouchOutside(false);
+        progress.setCancelable(false);
+        progress.setNegativeButton(Brand.t("Отмена", "Cancel"), (dlg, w) -> stop.set(true));
         progress.show();
+        final Context c = activity.getApplicationContext();
         new Thread(() -> {
-            final File dir = new File(activity.getFilesDir(), "cache");
+            final File dir = new File(c.getFilesDir(), "cache");
             dir.mkdirs();
             final File apk = new File(dir, "tgx-update-" + version.replaceAll("[^0-9A-Za-z.]", "") + ".apk");
             final File[] old = dir.listFiles((d, n) -> n.startsWith("tgx-update") && !n.startsWith(apk.getName()));
@@ -109,10 +207,22 @@ public final class Updater {
                     urls.add(file.optString(k));
                 }
             }
+            final long[] shown = {-1};
             boolean ok = false;
             for (String u : urls) {
+                if (stop.get()) {
+                    break;
+                }
                 try {
-                    fetch(u, apk);
+                    fetch(u, apk, stop, percent -> {
+                        if (percent != shown[0]) {
+                            if (percent / 25 != shown[0] / 25) {
+                                Bypass.note("update: " + percent + " %");
+                            }
+                            shown[0] = percent;
+                            AndroidUtilities.runOnUIThread(() -> progress.setProgress(percent));
+                        }
+                    });
                     final String want = file.optString("sha256");
                     if (!want.isEmpty() && !want.equalsIgnoreCase(sha256(apk))) {
                         error = "sha256";
@@ -124,6 +234,7 @@ public final class Updater {
                     break;
                 } catch (Throwable e) {
                     error = e.getClass().getSimpleName();
+                    Bypass.note("update: " + Uri.parse(u).getHost() + " " + error);
                 }
             }
             final boolean done = ok;
@@ -133,13 +244,18 @@ public final class Updater {
                     progress.dismiss();
                 } catch (Throwable ignore) {
                 }
+                final Activity a = current.get();
+                if (stop.get() || !alive(a)) {
+                    return;   // the part stays: the next attempt continues it
+                }
                 if (!done) {
-                    new AlertDialog.Builder(activity).setTitle(Brand.name)
+                    new AlertDialog.Builder(a).setTitle(Brand.name)
                             .setMessage(Brand.t("Не удалось скачать обновление: ", "Could not download the update: ") + err)
-                            .setPositiveButton("OK", null).show();
+                            .setPositiveButton(Brand.t("Ещё раз", "Retry"), (dlg, w) -> download(file, version))
+                            .setNegativeButton(Brand.t("Закрыть", "Close"), null).show();
                     return;
                 }
-                install(activity, apk);
+                install(a, apk);
             });
         }, "tgx-update-dl").start();
     }
@@ -227,7 +343,7 @@ public final class Updater {
     }
 
     /** Downloads with resume: the part stays in «…part», the next attempt (or the next mirror of the same file) continues it. */
-    private static void fetch(String url, File to) throws Exception {
+    private static void fetch(String url, File to, AtomicBoolean stop, Progress progress) throws Exception {
         final File part = new File(to.getPath() + ".part");
         for (int attempt = 0; ; attempt++) {
             final long have = part.length();
@@ -246,16 +362,28 @@ public final class Updater {
                 if (code != 200 && code != 206) {
                     throw new java.io.IOException("HTTP " + code);
                 }
+                long done = code == 206 ? have : 0;
+                final long total = c.getContentLength() > 0 ? done + c.getContentLength() : 0;
                 try (InputStream in = c.getInputStream(); FileOutputStream out = new FileOutputStream(part, code == 206)) {
                     final byte[] buf = new byte[65536];
                     int n;
                     while ((n = in.read(buf)) > 0) {
+                        if (stop.get()) {
+                            throw new InterruptedException();
+                        }
                         out.write(buf, 0, n);
+                        done += n;
+                        if (total > 0) {
+                            progress.on((int) (done * 100 / total));
+                        }
                     }
+                }
+                if (total > 0 && done < total) {
+                    throw new java.io.IOException("short");
                 }
                 break;
             } catch (java.io.IOException e) {
-                if (attempt >= 4) {
+                if (attempt >= 4 || stop.get()) {
                     throw e;
                 }
                 Thread.sleep(2000L * (attempt + 1));
