@@ -12,12 +12,18 @@ runs:
     - name: apply Cloud Talk
       shell: bash
       run: python talk/desktop/apply.py "$TBUILD/tdesktop"
+    - name: memory for the compiler (the precompiled header of Telegram needs gigabytes per cl.exe)
+      uses: al-cheb/configure-pagefile-action@a3b6ebd6b634da88790d9c58d4b37a7f4a7b8708   # v1.4
+      with:
+        minimum-size: 16GB
+        maximum-size: 32GB
+        disk-root: "C:"
     - name: configure and build
       shell: cmd
       run: |
         cd %TBUILD%\tdesktop\Telegram
         call configure.bat x64 -D TDESKTOP_API_TEST=ON -D DESKTOP_APP_DISABLE_AUTOUPDATE=ON -D DESKTOP_APP_DISABLE_CRASH_REPORTS=ON > %GITHUB_WORKSPACE%\configure.log 2>&1 || (type %GITHUB_WORKSPACE%\configure.log & exit /b 1)
-        cmake --build ..\out --config Release --parallel -- /v:m > %GITHUB_WORKSPACE%\build.log 2>&1
+        cmake --build ..\out --config Release -- /v:m /m:1 /p:CL_MPCount=4 > %GITHUB_WORKSPACE%\build.log 2>&1
         set RC=%ERRORLEVEL%
         findstr /R /C:"error " /C:"error:" %GITHUB_WORKSPACE%\build.log > %GITHUB_WORKSPACE%\errors.txt
         type %GITHUB_WORKSPACE%\errors.txt | more +0
