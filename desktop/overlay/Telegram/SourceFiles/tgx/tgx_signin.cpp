@@ -15,7 +15,10 @@ Licensed under GNU GPL v3 with the OpenSSL exception, like Telegram Desktop.
 #include <string>
 
 #ifdef Q_OS_WIN
-#include "base/platform/win/base_windows_h.h"
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif // NOMINMAX
+#include <windows.h>
 #include <sddl.h>
 #include <shlobj.h>
 #include <knownfolders.h>

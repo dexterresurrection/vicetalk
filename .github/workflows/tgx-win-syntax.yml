@@ -1,0 +1,40 @@
+name: talk-win-syntax
+# Compiles only our Windows-only file against the finished Qt headers (artifact libs of desktop/ci/libs-run-id.txt).
+on:
+  workflow_dispatch:
+jobs:
+  syntax:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: run id of the libraries
+        shell: bash
+        run: echo "LIBS_RUN_ID=$(cat desktop/ci/libs-run-id.txt)" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@v4
+        with:
+          name: libs
+          path: libs-in
+          run-id: ${{ env.LIBS_RUN_ID }}
+          github-token: ${{ github.token }}
+      - name: Qt headers
+        shell: bash
+        run: |
+          7z x -y -bso0 -bsp0 libs-in/Libraries.7z 'Qt-6.11.2/include/*' -olibs
+          ls libs/Qt-6.11.2/include | head -40
+      - uses: Eden-CI/msvc-dev-cmd@master
+        with:
+          arch: x64
+          sdk: 10.0.26100.0
+          toolset: "14.44"
+      - name: compile
+        shell: cmd
+        run: |
+          set INC=%CD%\libs\Qt-6.11.2\include
+          cl /nologo /c /std:c++20 /permissive- /Zc:__cplusplus /Zc:preprocessor /EHsc /utf-8 /W3 /MT /DUNICODE /D_UNICODE /DWIN32_LEAN_AND_MEAN /DQT_CORE_LIB /I"%INC%" /I"%INC%\QtCore" /I"%CD%\desktop\ci\stub" /I"%CD%\desktop\overlay\Telegram\SourceFiles" /FI"%CD%\desktop\ci\stub\pch.h" desktop\overlay\Telegram\SourceFiles\tgx\tgx_signin.cpp
+          if errorlevel 1 exit /b 1
+          echo without WIN32_LEAN_AND_MEAN
+          cl /nologo /c /std:c++20 /permissive- /Zc:__cplusplus /Zc:preprocessor /EHsc /utf-8 /W3 /MT /DUNICODE /D_UNICODE /DQT_CORE_LIB /I"%INC%" /I"%INC%\QtCore" /I"%CD%\desktop\ci\stub" /I"%CD%\desktop\overlay\Telegram\SourceFiles" /FI"%CD%\desktop\ci\stub\pch.h" desktop\overlay\Telegram\SourceFiles\tgx\tgx_signin.cpp
