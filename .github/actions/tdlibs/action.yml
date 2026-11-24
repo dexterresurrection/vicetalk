@@ -8,6 +8,10 @@ inputs:
   build:
     required: false
     default: "false"
+outputs:
+  complete:
+    description: "1 when prepare.py finished every library"
+    value: ${{ steps.prep.outputs.complete }}
 runs:
   using: composite
   steps:
@@ -60,6 +64,7 @@ runs:
         fi
         df -h /c || true
     - name: prepare.py (cut at ${{ inputs.minutes }} min)
+      id: prep
       shell: pwsh
       run: |
         $log = "$env:GITHUB_WORKSPACE\prepare-${{ inputs.part }}.log"
@@ -80,6 +85,7 @@ runs:
         } else {
           Write-Host "prepare.py exit code $($p.ExitCode)"
           "EXIT $($p.ExitCode)" | Out-File -Append $log
+          if ($p.ExitCode -eq 0) { "complete=1" >> $env:GITHUB_OUTPUT }
         }
         Get-Content $log | Select-String -Pattern '^\[\d+/\d+\]|FAILED|TIMEOUT|EXIT|rror' | Select-Object -Last 150
         Get-ChildItem "$env:TBUILD\Libraries\win64\cache_keys" -ErrorAction SilentlyContinue | ForEach-Object { $_.Name } | Out-File "$env:GITHUB_WORKSPACE\done-${{ inputs.part }}.txt"
@@ -95,11 +101,16 @@ runs:
       run: |
         mkdir -p libs-out
         df -h "$LibrariesPath" | tail -1
-        cd "$LibrariesPath" && 7z a -mx=1 -bso0 -bsp0 "$GITHUB_WORKSPACE/libs-out/Libraries.7z" . && ls -la "$GITHUB_WORKSPACE/libs-out"
+        cd "$LibrariesPath"
+        find . -xtype l -delete || true   # broken links make 7z return 1
+        rc=0; 7z a -mx=1 -bso0 -bsp0 "$GITHUB_WORKSPACE/libs-out/Libraries.7z" . || rc=$?
+        ls -la "$GITHUB_WORKSPACE/libs-out"
+        [ $rc -le 1 ]   # 1 = warnings, the archive is fine
     - uses: actions/upload-artifact@v4
       if: inputs.build != 'true'
       with:
-        name: libs-${{ inputs.part }}
+        name: libs
+        overwrite: true
         path: libs-out/Libraries.7z
         compression-level: 0
         retention-days: 7

@@ -1,5 +1,5 @@
 name: talk-desktop-win-build
-# Only the Cloud Talk exe, on libraries from an earlier talk-desktop-win run (artifact libs-3 of LIBS_RUN_ID),
+# Only the Cloud Talk exe, on libraries from an earlier talk-desktop-win run (artifact libs of LIBS_RUN_ID),
 # so a code change does not rebuild Qt/WebRTC/FFmpeg. LIBS_RUN_ID is written into libs-run-id.txt by tools/ci_run.py users.
 on:
   workflow_dispatch:
@@ -26,7 +26,7 @@ jobs:
         run: echo "LIBS_RUN_ID=$(cat talk/desktop/ci/libs-run-id.txt)" >> "$GITHUB_ENV"
       - uses: actions/download-artifact@v4
         with:
-          name: libs-3
+          name: libs
           path: libs-in
           run-id: ${{ env.LIBS_RUN_ID }}
           github-token: ${{ github.token }}

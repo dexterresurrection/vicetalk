@@ -3,7 +3,7 @@ name: talk-desktop-win
 # A cold build of the libraries (Qt, WebRTC, FFmpeg…) does not fit into one 6-hour job on a 4-core runner,
 # so three jobs continue each other: prepare.py skips every library whose cache key is already there, a library cut
 # by the step timeout is rebuilt from scratch by the next job. Libraries travel between jobs as one 7z artifact.
-# A later run can reuse them: set LIBS_RUN_ID to that run's id (artifact libs-3).
+# A later run can reuse them: set LIBS_RUN_ID to that run's id (artifact libs).
 on:
   workflow_dispatch:
 env:
@@ -19,36 +19,42 @@ jobs:
   libs1:
     runs-on: windows-latest
     timeout-minutes: 350
+    outputs:
+      complete: ${{ steps.libs.outputs.complete }}
     steps:
       - uses: actions/checkout@v4
         with:
           path: talk
       - name: libraries, part 1
+        id: libs
         uses: ./talk/.github/actions/tdlibs
         with:
           part: "1"
           minutes: "315"
   libs2:
     needs: libs1
-    if: always()
+    if: always() && needs.libs1.outputs.complete != '1'
     runs-on: windows-latest
     timeout-minutes: 350
+    outputs:
+      complete: ${{ steps.libs.outputs.complete }}
     steps:
       - uses: actions/checkout@v4
         with:
           path: talk
       - uses: actions/download-artifact@v4
         with:
-          name: libs-1
+          name: libs
           path: libs-in
       - name: libraries, part 2
+        id: libs
         uses: ./talk/.github/actions/tdlibs
         with:
           part: "2"
           minutes: "315"
   libs3:
-    needs: libs2
-    if: always()
+    needs: [libs1, libs2]
+    if: always() && needs.libs1.outputs.complete != '1' && needs.libs2.outputs.complete != '1'
     runs-on: windows-latest
     timeout-minutes: 350
     steps:
@@ -57,15 +63,16 @@ jobs:
           path: talk
       - uses: actions/download-artifact@v4
         with:
-          name: libs-2
+          name: libs
           path: libs-in
       - name: libraries, part 3
+        id: libs
         uses: ./talk/.github/actions/tdlibs
         with:
           part: "3"
           minutes: "315"
   build:
-    needs: libs3
+    needs: [libs1, libs2, libs3]
     if: always()
     runs-on: windows-latest
     timeout-minutes: 350
@@ -75,7 +82,7 @@ jobs:
           path: talk
       - uses: actions/download-artifact@v4
         with:
-          name: libs-3
+          name: libs
           path: libs-in
       - name: build Cloud Talk
         uses: ./talk/.github/actions/tdbuild
