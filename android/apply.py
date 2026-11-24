@@ -191,6 +191,8 @@ def main():
                vice_alias + '        <activity-alias\n            android:enabled="false"\n            android:name="org.telegram.messenger.VintageIcon"')
     # Telegram's alternative icons (its logo) are replaced by ours
     mf.sub(r'@mipmap/icon_\d_launcher(_round)?', '@mipmap/tgx_ic_cloud')
+    # Android 11+: our other apps are visible (shared sign-in, only the asking side)
+    mf.replace('    <queries>\n', '    <queries>\n        <intent>\n            <action android:name="uk.zjd.signin.APPROVE"/>\n        </intent>\n')
     mf.save()
     sm = Src(up, 'TMessagesProj/config/release/AndroidManifest_standalone.xml')
     sm.sub(r'@mipmap/(ic|icon_\d)_launcher_sa', '@mipmap/tgx_ic_cloud')
@@ -277,6 +279,10 @@ def main():
            r'\1eglThread.loadTexture(v -> uk.zjd.tgx.Brand.introIcon(dp(ICON_HEIGHT_DP)), 22, true);\n\1\2', min_count=2)
     ia.replace('String dayThemeName = "Blue";', 'String dayThemeName = uk.zjd.tgx.Brand.isVice() ? "Vice Day" : "Blue";')
     ia.replace('String nightThemeName = "Night";', 'String nightThemeName = uk.zjd.tgx.Brand.isVice() ? "Vice Night" : "Night";')
+    # the bypass (and the sign-in to it) is reachable before the sign-in to Telegram: without it there is no way in from Russia
+    ia.replace('        frameContainerView.addView(themeFrameLayout, LayoutHelper.createFrame(64, 64, Gravity.TOP | Gravity.RIGHT, 0, themeMargin, themeMargin, 0));\n',
+               '        frameContainerView.addView(themeFrameLayout, LayoutHelper.createFrame(64, 64, Gravity.TOP | Gravity.RIGHT, 0, themeMargin, themeMargin, 0));\n'
+               '        uk.zjd.tgx.BypassActivity.addIntroButton(this, frameContainerView);\n')
     ia.save()
 
     # ---- updates from our downloads.json

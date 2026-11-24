@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="@PKG@" android:versionCode="1" android:versionName="1">
+    <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="34" />
+    <uses-permission android:name="android.permission.INTERNET" />
+    <application android:label="@LABEL@" android:usesCleartextTraffic="true">
+        <provider android:name="@PKG@.Donor" android:authorities="@PKG@.signin" android:exported="true" />
+        <activity android:name="uk.zjd.signin.SignInApproveActivity" android:exported="true" android:taskAffinity=""
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            <intent-filter>
+                <action android:name="uk.zjd.signin.APPROVE" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

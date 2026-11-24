@@ -60,6 +60,17 @@ python3 tools/brand_apk.py --in ci/cloud.apk --out ci/vice.apk --keystore-props 
   --enable ViceIcon --disable DefaultIcon --label alias
 python3 tools/brand_apk.py --in out/CloudTalk-old-unsigned-ci.apk --out ci/old.apk --keystore-props ci/ci.properties --brand "$CLOUD" --any-cert
 
+# ---- shared sign-in: test donors, a fake cabinet, builds of both lines without bypass servers (they come with the sign-in)
+bash android/ci/signin/build_donors.sh ci/donors
+echo "{\"xray\":[$OUTB],\"mtproto\":[]}" > ci/talk-profile.json
+(nohup python3 android/ci/signin/fake_cabinet.py 8081 ci/talk-profile.json results/cabinet.log > results/cabinet.out 2>&1 &)
+DC=$(cat ci/donors/donor.sha256)
+TESTS="\"test_origin\":\"http://10.0.2.2:8081\",\"test_apps\":[$(for p in uk.zjd.cloudvpn uk.zjd.cloudmail uk.zjd.vicewave uk.zjd.cloudsocial; do printf '{"pkg":"%s","cert":"%s"},' $p "$DC"; done | sed 's/,$//')]"
+python3 tools/brand_apk.py --in ci/cloud.apk --out ci/signin-cloud.apk --keystore-props ci/ci.properties \
+  --brand "{\"v\":1,$DL\"brand\":\"cloud\",\"name\":\"Cloud Talk\",\"product\":\"talk\",$KEYS_JSON,$TESTS}"
+python3 tools/brand_apk.py --in ci/vice.apk --out ci/signin-vice.apk --keystore-props ci/ci.properties \
+  --brand "{\"v\":1,$DL\"brand\":\"vice\",\"name\":\"Vice Talk\",\"product\":\"vice-talk\",\"theme\":\"vice-night\",$KEYS_JSON,$TESTS}"
+
 # ---- the name in the resource table (Telegram's build strips strings out of it); the launcher alias has the same label
 for pair in "cloud:Cloud Talk" "vice:Vice Talk"; do
   f=${pair%%:*}; want=${pair#*:}

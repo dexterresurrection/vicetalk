@@ -11,7 +11,7 @@ on:
 jobs:
   check:
     runs-on: windows-latest
-    timeout-minutes: 40
+    timeout-minutes: 70
     steps:
       - uses: actions/checkout@v4
       - name: inputs

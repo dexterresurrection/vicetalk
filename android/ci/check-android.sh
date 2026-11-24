@@ -136,5 +136,6 @@ if [ "${n:-0}" -gt 0 ]; then ok "test server: $n connections to Telegram data ce
 sudo tail -5 /opt/xr/access.log | sed 's/^/     /' | tee -a "$SUM"
 run_line ci/vice.apk vice ViceIcon "Vice Talk"
 sudo cp /opt/xr/access.log "$R/server-access.log" 2>/dev/null; sudo chmod 644 "$R/server-access.log" 2>/dev/null
+. android/ci/check-signin.sh
 echo "FAILS=$FAILS" | tee -a "$SUM"
 [ "$FAILS" -eq 0 ]

@@ -24,6 +24,9 @@ import org.telegram.messenger.SharedConfig;
 import org.telegram.messenger.UserConfig;
 import org.telegram.messenger.voip.Instance;
 import org.telegram.tgnet.ConnectionsManager;
+import org.telegram.ui.ActionBar.AlertDialog;
+import org.telegram.ui.ActionBar.BaseFragment;
+import org.telegram.ui.LaunchActivity;
 import org.telegram.utils.proxy.ProxySettings;
 
 import java.io.BufferedReader;
@@ -171,7 +174,7 @@ public final class Bypass {
         final String m = mode == MODE_ALWAYS ? Brand.t("всегда", "always") : mode == MODE_OFF ? Brand.t("выключен", "off") : Brand.t("авто", "auto");
         final String s = active ? Brand.t("сейчас через обход", "now via bypass") : Brand.t("сейчас напрямую", "now direct");
         if (ctx != null && profileCount() == 0 && !Account.loggedIn(ctx)) {
-            return Brand.t("Войдите в аккаунт CloudVPN — обход входит в подписку", "Sign in to CloudVPN — the bypass is part of the subscription");
+            return Brand.t("Войдите в аккаунт " + Account.title() + " — обход входит в подписку", "Sign in to " + Account.title() + " — the bypass is part of the subscription");
         }
         return Brand.t("Режим: ", "Mode: ") + m + " · " + s;
     }
@@ -196,7 +199,10 @@ public final class Bypass {
                 connectingSince = 0;
             }
             if (mode == MODE_AUTO) {
-                if (!active && connecting && !userProxyInUse() && now - connectingSince >= DIRECT_GRACE_MS) {
+                if (!active && connecting && !userProxyInUse() && now - connectingSince >= DIRECT_GRACE_MS
+                        && profileCount() == 0 && mtprotoCount() == 0) {
+                    offerLogin();   // nothing to bypass with until the sign-in to our account
+                } else if (!active && connecting && !userProxyInUse() && now - connectingSince >= DIRECT_GRACE_MS) {
                     remember(true);
                     enable("auto: no direct connection for " + (now - connectingSince) / 1000 + " s");
                 } else if (active && now - lastProbe >= PROBE_EVERY_MS) {
@@ -226,6 +232,28 @@ public final class Bypass {
             FileLog.e(e);
         }
         ui.postDelayed(Bypass::tick, TICK_MS);
+    }
+
+    private static boolean offered;
+
+    /** Telegram does not answer and there are no bypass servers yet: one offer per start, on any screen. */
+    private static void offerLogin() {
+        if (offered || ApplicationLoader.mainInterfacePaused || Account.loggedIn(ctx)) {
+            return;
+        }
+        final BaseFragment f = LaunchActivity.getLastFragment();
+        if (f == null || f.getParentActivity() == null || f instanceof BypassActivity) {
+            return;
+        }
+        offered = true;
+        note("offer: sign in for the bypass");
+        new AlertDialog.Builder(f.getParentActivity())
+                .setTitle(Brand.t("Telegram не отвечает", "Telegram does not answer"))
+                .setMessage(Brand.t("Похоже, в этой сети он замедлен или заблокирован. Войдите в аккаунт " + Account.title() + " — " + Brand.name + " включит обход сам.",
+                        "It looks slow or blocked on this network. Sign in to " + Account.title() + " and " + Brand.name + " will turn the bypass on by itself."))
+                .setPositiveButton(Brand.t("Войти", "Sign in"), (d, w) -> f.presentFragment(new BypassActivity()))
+                .setNegativeButton(Brand.t("Не сейчас", "Not now"), null)
+                .show();
     }
 
     private static String networkKey() {
@@ -295,6 +323,9 @@ public final class Bypass {
     public static void enable(String why) {
         if (ctx == null || userProxyInUse()) {
             return;
+        }
+        if (profileCount() == 0 && mtprotoCount() == 0) {
+            return;   // nothing to bypass with: tick() offers the sign-in
         }
         note("enable: " + why);
         active = true;

@@ -55,7 +55,7 @@ function run-line($dir, $line, $name) {
   Set-NetFirewallProfile -All -Enabled True
   $talkcfg | Out-File "$dir\talk.json" -Encoding ascii
   $data = "$env:APPDATA\Cloud Talk"
-  Remove-Item "$data\log.txt" -ErrorAction SilentlyContinue
+  Remove-Item "$data\log.txt", "$data\tdata\tgx\bypass.json" -ErrorAction SilentlyContinue   # direct first, nothing remembered
   $p = Start-Process $exe -PassThru
   $log = "$data\log.txt"
   $deadline = (Get-Date).AddSeconds(150)
@@ -87,6 +87,107 @@ function run-line($dir, $line, $name) {
   Remove-NetFirewallRule -DisplayName "talk-block-$line" -ErrorAction SilentlyContinue
 }
 
+# ---------- shared sign-in (only the asking side): a fake cabinet, test donors in Program Files as our programs are
+$tgx = "$env:APPDATA\Cloud Talk\tdata\tgx"
+$cab = "$R\cabinet.log"
+New-Item -ItemType Directory -Force C:\cab, C:\donor, C:\donorfake | Out-Null
+"{`"xray`":[$outb],`"mtproto`":[]}" | Out-File C:\cab\talk-profile.json -Encoding ascii
+$null = Start-Process python -ArgumentList "$PWD\..\..\..\android\ci\signin\fake_cabinet.py",'8081','C:\cab\talk-profile.json',$cab -PassThru -WindowStyle Hidden
+& C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe /nologo /target:winexe /out:C:\donor\donor.exe "$PWD\donor.cs" | Out-String | Write-Host
+if (-not (Test-Path C:\donor\donor.exe)) { bad 'sign-in: the test donor did not compile' }
+function place-donor($key, $folder, $exe) {
+  New-Item -ItemType Directory -Force $folder | Out-Null
+  Copy-Item C:\donor\donor.exe "$folder\$exe" -Force
+  $k = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$key"
+  New-Item -Path $k -Force | Out-Null
+  Set-ItemProperty -Path $k -Name InstallLocation -Value $folder
+}
+function start-donors($mode) {
+  stop-donors
+  Remove-Item C:\donor\*.log -ErrorAction SilentlyContinue
+  Start-Process 'C:\Program Files\CI VPN\CloudVPN.exe' -ArgumentList 'cloudvpn','https://cabinet.zjd.uk','"CI VPN"','"CI Anna"',$mode,'C:\donor\cloudvpn.log'
+  Start-Process 'C:\Program Files\CI Mail\CloudMail.exe' -ArgumentList 'mail','-','"CI Old"','"CI Anna"',$mode,'C:\donor\mail.log'
+  Start-Process 'C:\Program Files\CI Wave\ViceWave.exe' -ArgumentList 'wave','https://vice.zjd.uk','"CI Wave"','"CI Vera"',$mode,'C:\donor\wave.log'
+  # the pipe of the messenger is taken by a copy outside Program Files: not our program
+  Start-Process 'C:\donorfake\CloudMessenger.exe' -ArgumentList 'messenger','https://cabinet.zjd.uk','"CI Fake"','"CI Mallory"',$mode,'C:\donor\messenger.log'
+  Start-Sleep 2
+}
+function stop-donors { Stop-Process -Name CloudVPN, CloudMail, ViceWave, CloudMessenger -Force -ErrorAction SilentlyContinue; Start-Sleep 1 }
+function cab-count($re) { (Select-String -Path $cab -Pattern $re -ErrorAction SilentlyContinue | Measure-Object).Count }
+place-donor 'CloudVPN' 'C:\Program Files\CI VPN' 'CloudVPN.exe'
+place-donor 'CloudMail' 'C:\Program Files\CI Mail' 'CloudMail.exe'
+place-donor 'ViceWave' 'C:\Program Files\CI Wave' 'ViceWave.exe'
+place-donor 'CloudMessenger' 'C:\Program Files\CI Messenger' 'CloudMessenger.exe'
+Copy-Item C:\donor\donor.exe C:\donorfake\CloudMessenger.exe -Force
+
+# starts the client with the given TGX_CI_SIGNIN until $until is in its log; returns the log
+function run-signin($dir, $mode, $until, $seconds, $keep = $false) {
+  $cfg = "{`"api_id`":17349,`"api_hash`":`"344583e45741c457fe1862106095a5eb`",`"version`":`"0.1.0`",`"test_origin`":`"http://127.0.0.1:8081`",`"bypass`":{`"mode`":`"auto`"}}"
+  $cfg | Out-File "$dir\talk.json" -Encoding ascii
+  if (-not $keep) { Remove-Item "$tgx\account*.json", "$tgx\profiles*.json", "$tgx\bypass.json" -ErrorAction SilentlyContinue }
+  $log = "$env:APPDATA\Cloud Talk\log.txt"
+  Remove-Item $log -ErrorAction SilentlyContinue
+  $env:TGX_CI_SIGNIN = $mode
+  $null = Start-Process "$dir\CloudTalk.exe" -PassThru
+  $env:TGX_CI_SIGNIN = ''
+  $deadline = (Get-Date).AddSeconds($seconds); $t = ''; $approved = $false
+  while ((Get-Date) -lt $deadline) {
+    Start-Sleep 2
+    $t = Get-Content $log -Raw -ErrorAction SilentlyContinue
+    if ($mode -eq 'code' -and -not $approved) {   # «confirmed in the cabinet»
+      $pending = @(Invoke-RestMethod http://127.0.0.1:8081/pending -ErrorAction SilentlyContinue)
+      if ($pending.Count -gt 0 -and $pending[0]) {
+        Invoke-RestMethod http://127.0.0.1:8081/api/cabinet/auth/device/approve -Method Post -Headers @{ Authorization = 'Bearer donor' } -Body (@{ user_code = "$($pending[-1])" } | ConvertTo-Json) | Out-Null
+        $approved = $true
+      }
+    }
+    if ($t -match $until) { Start-Sleep 3; break }
+  }
+  $script:sshot++
+  shot "signin-$($script:sshot)"
+  $t = Get-Content $log -Raw -ErrorAction SilentlyContinue
+  Stop-Process -Name CloudTalk -Force -ErrorAction SilentlyContinue
+  Start-Sleep 2
+  (($t -split "`n") | Select-String 'Tgx:') | Out-File "$R\signin-$($script:sshot).txt" -Encoding utf8
+  return "$t"
+}
+$script:sshot = 0
+function check-signin($dir, $line) {
+  $vice = ($line -eq 'vice')
+  $first = if ($vice) { 'donor wave / CI Wave / CI Vera' } else { 'donor cloudvpn / CI VPN / CI Anna' }
+  New-NetFirewallRule -DisplayName "talk-block-signin" -Direction Outbound -Program "$dir\CloudTalk.exe" -RemoteAddress $tgNets -Action Block | Out-Null
+  stop-donors
+  $t = run-signin $dir 'code' 'telegram state 2 \(bypass\)' 120
+  if ($t -match 'sign-in: 0 program') { ok "${line}: no donors — nothing offered" } else { bad "${line}: no donors" }
+  if ($t -match 'sign-in: done') { ok "${line}: sign-in by the device code" } else { bad "${line}: sign-in by the device code" }
+  if ($t -match 'profiles from the account: 1 xray') { ok "${line}: bypass servers of the account arrived" } else { bad "${line}: no bypass servers" }
+  if ($t -match 'telegram state 2 \(bypass\)') { ok "${line}: Telegram connected through the account's bypass" } else { bad "${line}: no connection through the account's bypass" }
+  if ((cab-count 'refresh ok rotate=True') -ge 1 -and (cab-count 'refresh 401') -eq 0) { ok "${line}: session renewed with rotate" } else { bad "${line}: refresh $(cab-count 'refresh ok rotate=True') ok, $(cab-count 'refresh 401') refused" }
+  start-donors 'deny'
+  $done = cab-count 'poll: signed in'
+  $t = run-signin $dir 'through' 'sign-in: not confirmed' 60
+  if ($t -match [regex]::Escape($first)) { ok "${line}: offered: $first" } else { bad "${line}: not offered: $first" }
+  if ($t -match 'CI Mallory') { bad "${line}: a copy outside Program Files accepted" } else { ok "${line}: a copy outside Program Files — not offered" }
+  if ($t -match 'not our program behind the pipe of messenger') { ok "${line}: the log says why" } else { bad "${line}: no line about the fake" }
+  if ((Get-Content C:\donor\messenger.log -Raw) -match 'state|approve') { bad "${line}: the fake received a request" } else { ok "${line}: the fake received nothing" }
+  if ($vice) {
+    if ($t -match 'donor (cloudvpn|mail)') { bad 'vice: a CloudVPN account accepted' } else { ok 'vice: accounts of cabinet.zjd.uk (and older programs) — not offered' }
+  } else {
+    if ($t -match 'donor wave') { bad 'cloud: an account of vice.zjd.uk accepted' } else { ok 'cloud: an account of vice.zjd.uk — not offered' }
+    if ($t -match 'donor mail / CI Old') { ok 'cloud: a program older than the field answers for CloudVPN' } else { bad 'cloud: the older program is missing' }
+  }
+  if ($t -match 'sign-in: not confirmed' -and $t -notmatch 'sign-in: done' -and (cab-count 'poll: signed in') -eq $done) { ok "${line}: refusal — no session" } else { bad "${line}: refusal" }
+  $req = (Get-Content "C:\donor\$(if ($vice) { 'wave' } else { 'cloudvpn' }).log" -Raw)
+  if ($req -match '"approve"' -and $req -notmatch '"pub"') { ok "${line}: the request carries only the code and the service (no key is asked for)" } else { bad "${line}: request: $req" }
+  start-donors 'allow'
+  $t = run-signin $dir 'through' 'profiles from the account' 60
+  if ($t -match 'confirmed by another program' -and $t -match 'sign-in: done') { ok "${line}: signed in through the other program" } else { bad "${line}: not signed in through the other program" }
+  if ($t -match '[0-9A-F]{4}-[0-9A-F]{4}\b.*\n' -and ($t -split "`n" | Select-String 'Tgx:.*[0-9A-F]{4}-[0-9A-F]{4}')) { bad "${line}: a code in the log" } else { ok "${line}: no codes in the log" }
+  stop-donors
+  Remove-Item "$tgx\account*.json", "$tgx\profiles*.json", "$tgx\bypass.json" -ErrorAction SilentlyContinue
+  Remove-NetFirewallRule -DisplayName 'talk-block-signin' -ErrorAction SilentlyContinue
+}
+
 # ---------- Cloud
 if (fetch 'setup-url.txt' 'setup-sha.txt' "$env:TEMP\CloudTalk-Setup.exe") {
   Start-Process "$env:TEMP\CloudTalk-Setup.exe" -ArgumentList '/S' -Wait
@@ -95,6 +196,7 @@ if (fetch 'setup-url.txt' 'setup-sha.txt' "$env:TEMP\CloudTalk-Setup.exe") {
   if ((Get-Content "$dir\brand.json" -Raw) -match '"brand":"cloud"') { ok 'Cloud: brand.json cloud' } else { bad "Cloud: brand.json $(Get-Content "$dir\brand.json" -Raw)" }
   if (Test-Path "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\Cloud Talk.lnk") { ok 'Cloud: Start menu shortcut' } else { note 'Cloud: no Start menu shortcut in ProgramData' }
   run-line $dir 'cloud' 'Cloud Talk'
+  check-signin $dir 'cloud'
 }
 # ---------- in-app update: an older version of the client (talk.json 0.0.9) downloads this installer and restarts itself
 if ($dir -and (Test-Path "$dir\CloudTalk.exe")) {
@@ -148,6 +250,11 @@ if ((Test-Path 'vice-url.txt') -and (fetch 'vice-url.txt' 'vice-sha.txt' "$env:T
   if (-not (Test-Path 'C:\Program Files\Cloud Talk\CloudTalk.exe')) { ok 'Vice: Cloud line removed' } else { bad 'Vice: Cloud line still installed' }
   if ((Get-Content "$vdir\brand.json" -Raw) -match '"brand":"vice"') { ok 'Vice: brand.json vice' } else { bad 'Vice: brand.json' }
   run-line $vdir 'vice' 'Vice Talk'
+  # the Cloud session of the same data folder is not used by the Vice line
+  '{"refresh":"r-cloud","name":"CI Anna"}' | Out-File "$tgx\account.json" -Encoding ascii
+  $t = run-signin $vdir 'list' 'program\(s\) can confirm' 40 $true
+  if ((Test-Path "$tgx\account.json") -and $t -match 'can confirm' -and $t -notmatch 'profiles') { ok 'vice: the CloudVPN session is kept apart and not used' } else { bad 'vice: the CloudVPN session' }
+  check-signin $vdir 'vice'
   Start-Process "$vdir\uninstall.exe" -ArgumentList '/S' -Wait
   Start-Sleep 3
   if (-not (Test-Path "$vdir\CloudTalk.exe")) { ok 'uninstall /S removed the program' } else { bad 'uninstall left the program' }
