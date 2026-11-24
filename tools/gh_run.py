@@ -57,7 +57,7 @@ def main():
             except Exception as e:  # noqa: BLE001
                 print('log of', job['name'], 'not available:', e)
     for art in api(f"/actions/runs/{run['id']}/artifacts?per_page=100")['artifacts']:
-        if art['name'].startswith(('libs-', 'native-')):
+        if art['name'] == 'libs' or art['name'].startswith(('libs-', 'native-')):
             print('artifact', art['name'], art['size_in_bytes'] // 1048576, 'MB stays on GitHub (reused by run id)')
             continue
         zipfile.ZipFile(io.BytesIO(api(art['archive_download_url'], raw=True))).extractall(os.path.join(out, art['name']))

@@ -28,7 +28,7 @@ class Src:
         self.rel = rel
         if not os.path.exists(self.path):
             die(f'no file {rel}')
-        self.text = open(self.path, encoding='utf-8', newline='').read()
+        self.text = open(self.path, encoding='utf-8').read()   # a Windows checkout has CRLF: read as LF
 
     def replace(self, old, new, count=1):
         n = self.text.count(old)
@@ -45,7 +45,7 @@ class Src:
         self.text = new
 
     def save(self):
-        open(self.path, 'w', encoding='utf-8', newline='').write(self.text)
+        open(self.path, 'w', encoding='utf-8', newline='\n').write(self.text)
 
 
 def main():
