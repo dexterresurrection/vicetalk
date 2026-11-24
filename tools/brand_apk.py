@@ -189,6 +189,7 @@ def main():
     ap.add_argument('--icon', help='ресурс значка, например mipmap/ic_launcher_vice')
     ap.add_argument('--any-cert', action='store_true', help='исходный APK подписан другим ключом (сборка CI)')
     ap.add_argument('--keep-abi', help='оставить только эту архитектуру в lib/ (arm64-v8a — «облегчённый» APK)')
+    ap.add_argument('--drop-abi', help='убрать эту архитектуру из lib/ (x86: у Telegram её нет, только чужие мелкие библиотеки)')
     a = ap.parse_args()
 
     brand = json.dumps(json.loads(a.brand), ensure_ascii=False, separators=(',', ':'))
@@ -224,6 +225,8 @@ def main():
                 if n.startswith('META-INF/') and re.search(r'\.(SF|RSA|DSA|EC)$|MANIFEST\.MF$', n):
                     continue  # старая подпись v1 — apksigner сделает новую
                 if a.keep_abi and n.startswith('lib/') and not n.startswith(f'lib/{a.keep_abi}/'):
+                    continue
+                if a.drop_abi and n.startswith(f'lib/{a.drop_abi}/'):
                     continue
                 data = zin.read(n)
                 if n == 'AndroidManifest.xml' and a.enable:

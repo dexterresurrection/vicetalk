@@ -59,6 +59,11 @@ runs:
           7z x -y -bso0 -bsp0 libs-in/Libraries.7z -o"$TBUILD/Libraries/win64"
           rm -f libs-in/Libraries.7z
           ls "$TBUILD/Libraries/win64/cache_keys" | tr '\n' ' '
+          # the generated binding is a .cpp; an archive packed after the old clean-up has no such files: build these three again
+          if [ ! -f "$TBUILD/Libraries/win64/tdesktop_rust/out/src/wallet_engine/wallet_engine.cpp" ]; then
+            echo "tdesktop_rust without its generated sources: built again"
+            for k in tlottie wallet-engine tdesktop_rust; do rm -f "$TBUILD/Libraries/win64/cache_keys/$k"; done
+          fi
         else
           echo "starting from scratch"
         fi
@@ -93,7 +98,7 @@ runs:
     - name: free up disk (keep libraries, headers, cache keys)
       shell: bash
       run: |
-        find $LibrariesPath '(' '(' ! '(' -name '*.lib' -o -name '*.a' -o -name '*.exe' -o -name '*.h' -o -name '*.hpp' -o -name '*.inc' -o -name '*.cmake' -o -name '*.pc' -o -path '*/include/*' -o -path '*/objects-*' -o -path '*/cache_keys/*' -o -path '*/patches/*' -o -path '*/nv-codec-headers/*' -o -name '*.rs' -o -name '*.toml' -o -name '*.json' -o -name '*.py' -o -name '*.def' -o -name '*.natvis' ')' -type f ')' -o -empty ')' -delete || true
+        find $LibrariesPath '(' '(' ! '(' -name '*.lib' -o -name '*.a' -o -name '*.exe' -o -name '*.h' -o -name '*.hpp' -o -name '*.inc' -o -name '*.cmake' -o -name '*.pc' -o -path '*/include/*' -o -path '*/objects-*' -o -path '*/cache_keys/*' -o -path '*/patches/*' -o -path '*/nv-codec-headers/*' -o -path '*/tdesktop_rust/out/*' -o -name '*.rs' -o -name '*.toml' -o -name '*.json' -o -name '*.py' -o -name '*.def' -o -name '*.natvis' ')' -type f ')' -o -empty ')' -delete || true
         du -sh "$LibrariesPath" || true
     - name: pack libraries
       if: inputs.build != 'true'

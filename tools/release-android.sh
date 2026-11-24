@@ -26,7 +26,7 @@ print(json.dumps(b, ensure_ascii=False, separators=(',', ':')))
 PY
 }
 CLOUD=$(brand cloud); VICE=$(brand vice)
-python3 "$ROOT/tools/brand_apk.py" --in "$IN" --out "$OUT/CloudTalk-$VER.apk" --keystore-props "$KS" --brand "$CLOUD" --any-cert
+python3 "$ROOT/tools/brand_apk.py" --in "$IN" --out "$OUT/CloudTalk-$VER.apk" --keystore-props "$KS" --brand "$CLOUD" --any-cert --drop-abi x86
 python3 "$ROOT/tools/brand_apk.py" --in "$IN" --out "$OUT/CloudTalk-arm64-$VER.apk" --keystore-props "$KS" --brand "$CLOUD" --any-cert --keep-abi arm64-v8a
 python3 "$ROOT/tools/brand_apk.py" --in "$OUT/CloudTalk-$VER.apk" --out "$OUT/ViceTalk-$VER.apk" --keystore-props "$KS" --brand "$VICE" \
   --enable ViceIcon --disable DefaultIcon --label alias
