@@ -166,6 +166,8 @@ def main():
     # ---- build files
     cm = Src(up, 'Telegram/CMakeLists.txt')
     cm.replace('    config.h\n', '    config.h\n    tgx/tgx.cpp\n    tgx/tgx.h\n    tgx/tgx_signin.cpp\n    tgx/tgx_signin.h\n')
+    # static Qt6Network: QDnsLookup needs the system's DNS library
+    cm.text += '\nif (WIN32)\n    target_link_libraries(Telegram PRIVATE dnsapi)\nendif()\n'
     cm.save()
     rc = Src(up, 'Telegram/Resources/winrc/Telegram.rc')
     rc.replace('VALUE "CompanyName", "Telegram FZ-LLC"', 'VALUE "CompanyName", "CloudVPN"')
