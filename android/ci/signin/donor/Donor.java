@@ -63,7 +63,7 @@ public class Donor extends ContentProvider {
 
     static void approve(Activity a) {
         final Intent i = a.getIntent();
-        Log.i("donor", "@PKG@ window for " + a.getCallingPackage() + ", extras " + i.getExtras().keySet());
+        Log.i("donor", "@PKG@ window for " + a.getCallingPackage() + ", extras " + new java.util.ArrayList<String>(i.getExtras().keySet()));
         a.setResult(Activity.RESULT_CANCELED);
         if (!"uk.zjd.cloudtalk".equals(a.getCallingPackage())) {
             a.finish();

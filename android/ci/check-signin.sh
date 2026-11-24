@@ -55,7 +55,8 @@ signin_check() {
   shot signin-refused
   sleep 8
   if [ "$(cab 'poll: signed in')" = "$done0" ] && [ "$(cab 'device/approve ok')" -eq 1 ]; then ok "refusal: no session appeared"; else bad "refusal: a session appeared"; fi
-  if adb logcat -d -s donor:I | grep -q "extras.*pub"; then bad "the request carries a key"; else ok "the request carries only the code and the service (no key is asked for)"; fi
+  local ex; ex=$(adb logcat -d -s donor:I | grep -o "window for.*" | tail -1 | tr -d '\r')
+  if echo "$ex" | grep -qE "uk.zjd.cloudtalk, extras \[(code, origin|origin, code)\]$"; then ok "the request carries only the code and the service (no key is asked for)"; else bad "the request: $ex"; fi
   # ---- consent
   tap_text "continue as ci anna — through “ci vpn”" 20
   tap_text "allow" 25 || bad "consent: no window"
@@ -72,6 +73,7 @@ signin_check() {
   if wait_log "sign-in: 1 app.s. can confirm" 20 >/dev/null && wait_ui "Continue as CI Vera — through “CI Wave”" 15; then ok "Vice: only the app with an account of vice.zjd.uk is offered"; else bad "Vice: $(adb logcat -d -s tgx:I | grep 'can confirm' | tail -1)"; fi
   if ui_has "Vice VPN account: |CI VPN|CI Old"; then bad "Vice: the CloudVPN account is used"; else ok "Vice: not signed in by the CloudVPN session"; fi
   if wait_ui "Bypass servers: 0" 10; then ok "Vice: the bypass servers of the other account are gone"; else bad "Vice: servers of the other account stayed"; fi
+  if ui_has "Telegram: connecting to proxy"; then bad "Vice: the other line's local proxy is still set"; else ok "Vice: no stale local proxy of the other line"; fi
   shot signin-vice
   tap_text "continue as ci vera — through “ci wave”" 15
   tap_text "allow" 25

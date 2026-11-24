@@ -114,6 +114,8 @@ bool PortOpen(int port) {
 	return socket.waitForConnected(300);
 }
 
+void OfferSignIn();
+
 class Bypass final : public QObject {
 public:
 	static Bypass &Instance() {
@@ -153,6 +155,7 @@ private:
 	bool ourProxyCurrent() const;
 	bool ourMtproto(const MTP::ProxyData &proxy) const;
 	bool userProxyInUse() const;
+	bool hasServers() const;
 	void addMtprotoFallbacks();
 	void save();
 	void updateStatus();
@@ -253,6 +256,12 @@ void Bypass::tick() {
 		if (!_active
 			&& _connectingSince
 			&& !userProxyInUse()
+			&& now - _connectingSince >= kDirectGrace
+			&& !hasServers()) {
+			OfferSignIn(); // nothing to bypass with until the sign-in to our account
+		} else if (!_active
+			&& _connectingSince
+			&& !userProxyInUse()
 			&& now - _connectingSince >= kDirectGrace) {
 			_state.insert(u"need_until"_q, double(QDateTime::currentMSecsSinceEpoch() + kRemember));
 			save();
@@ -328,7 +337,9 @@ bool Bypass::userProxyInUse() const {
 void Bypass::profilesUpdated() {
 	_state.remove(u"mtproto_added"_q);
 	addMtprotoFallbacks();
-	if (_active) {
+	if (_active && !hasServers()) {
+		disable(u"no bypass servers any more"_q);
+	} else if (_active) {
 		stopXray();
 		if (startXray()) {
 			useTelegramProxy(localProxy());
@@ -365,6 +376,11 @@ void Bypass::addMtprotoFallbacks() {
 
 void Bypass::enable(const QString &why) {
 	if (userProxyInUse()) {
+		return;
+	} else if (!hasServers()) {
+		if (ourProxyCurrent()) {
+			disable(u"no bypass servers, stale local proxy"_q);
+		}
 		return;
 	}
 	note(u"enable: "_q + why);
@@ -413,6 +429,12 @@ void Bypass::useTelegramProxy(const MTP::ProxyData &value) {
 	settings.setUseProxyForCalls(true);
 	Core::App().setCurrentProxy(value, MTP::ProxyData::Settings::Enabled);
 	Core::App().saveSettingsDelayed();
+}
+
+bool Bypass::hasServers() const {
+	const auto list = profiles();
+	return !list.value(u"xray"_q).toArray().isEmpty()
+		|| !list.value(u"mtproto"_q).toArray().isEmpty();
 }
 
 QJsonObject Bypass::profiles() const {
@@ -1067,7 +1089,7 @@ void Start() {
 	Bypass::Instance().start();
 	Account::Instance().load();
 	base::call_delayed(15000, qApp, [] { CheckUpdates(); });
-	base::call_delayed(8000, qApp, [] { SignInForChecks(); });
+	base::call_delayed(14000, qApp, [] { SignInForChecks(); });
 }
 
 void ConnectionStateChanged(int state) {
@@ -1221,6 +1243,25 @@ void ChooseSignIn(std::vector<SignInDonor> donors) {
 				}
 			},
 		});
+	}));
+}
+
+// Telegram does not answer and there are no bypass servers yet: one offer per start
+void OfferSignIn() {
+	static auto offered = false;
+	const auto window = ActiveWindow();
+	if (offered || !window || Account::Instance().loggedIn()) {
+		return;
+	}
+	offered = true;
+	LOG(("Tgx: offer: sign in for the bypass"));
+	window->show(Ui::MakeConfirmBox({
+		.text = T("Telegram не отвечает: похоже, в этой сети он замедлен или заблокирован. Войдите в аккаунт — программа включит обход сама. Аккаунт: ",
+			"Telegram does not answer: it looks slow or blocked on this network. Sign in and the bypass turns on by itself. Account: ") + ServiceName(),
+		.confirmed = [=](Fn<void()> close) { close(); AccountClicked(); },
+		.confirmText = T("Войти", "Sign in"),
+		.cancelText = T("Не сейчас", "Not now"),
+		.title = BypassTitle(),
 	}));
 }
 

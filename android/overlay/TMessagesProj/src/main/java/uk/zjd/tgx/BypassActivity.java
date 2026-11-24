@@ -7,6 +7,7 @@ package uk.zjd.tgx;
 import android.app.Activity;
 import android.content.Context;
 import android.content.Intent;
+import android.content.res.ColorStateList;
 import android.net.Uri;
 import android.graphics.Typeface;
 import android.util.TypedValue;
@@ -57,7 +58,7 @@ public class BypassActivity extends BaseFragment {
     @Override
     public View createView(Context context) {
         actionBar.setBackButtonImage(R.drawable.ic_ab_back);
-        actionBar.setAllowOverlayTitle(true);
+        actionBar.setAllowOverlayTitle(false);   // the state is on the screen itself
         actionBar.setTitle(Brand.t("Обход блокировок", "Bypass"));
         actionBar.setActionBarMenuOnItemClick(new ActionBar.ActionBarMenuOnItemClick() {
             @Override
@@ -91,10 +92,10 @@ public class BypassActivity extends BaseFragment {
         donorBox = new LinearLayout(context);
         donorBox.setOrientation(LinearLayout.VERTICAL);
         donorBox.setVisibility(View.GONE);
-        box.addView(donorBox, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
-        accountButton = new Button(context);
+        box.addView(donorBox, row());
+        accountButton = button(context);
         accountButton.setOnClickListener(v -> onAccountButton());
-        box.addView(accountButton, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        box.addView(accountButton, row());
         codeBox = new LinearLayout(context);
         codeBox.setOrientation(LinearLayout.VERTICAL);
         codeBox.setVisibility(View.GONE);
@@ -105,16 +106,16 @@ public class BypassActivity extends BaseFragment {
         buttons.setOrientation(LinearLayout.VERTICAL);
         codeButtons = buttons;
         codeBox.addView(buttons);
-        final Button openCabinet = new Button(context);
+        final Button openCabinet = button(context);
         openCabinet.setText(Brand.t("Открыть кабинет и подтвердить", "Open the cabinet and confirm"));
         openCabinet.setOnClickListener(v -> open(verificationUrl));
-        buttons.addView(openCabinet, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
-        final Button viaBot = new Button(context);
+        buttons.addView(openCabinet, row());
+        final Button viaBot = button(context);
         viaBot.setText(Brand.t("Подтвердить через бота", "Confirm in the bot"));
         viaBot.setOnClickListener(v -> open(telegramUrl));
-        buttons.addView(viaBot, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        buttons.addView(viaBot, row());
         box.addView(codeBox);
-        refreshButton = new Button(context);
+        refreshButton = button(context);
         refreshButton.setText(Brand.t("Обновить серверы обхода", "Refresh bypass servers"));
         refreshButton.setOnClickListener(v -> {
             refreshButton.setEnabled(false);
@@ -127,7 +128,7 @@ public class BypassActivity extends BaseFragment {
                 });
             }).start();
         });
-        box.addView(refreshButton, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        box.addView(refreshButton, row());
 
         final RadioGroup group = new RadioGroup(context);
         group.setPadding(0, AndroidUtilities.dp(12), 0, AndroidUtilities.dp(8));
@@ -140,6 +141,8 @@ public class BypassActivity extends BaseFragment {
             rb.setId(1000 + i);
             rb.setText(titles[i]);
             rb.setTextColor(fg);
+            rb.setButtonTintList(new ColorStateList(new int[][]{{android.R.attr.state_checked}, {}},
+                    new int[]{Theme.getColor(Theme.key_featuredStickers_addButton), gray}));
             rb.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 16);
             rb.setPadding(AndroidUtilities.dp(6), AndroidUtilities.dp(8), 0, AndroidUtilities.dp(8));
             group.addView(rb);
@@ -155,7 +158,7 @@ public class BypassActivity extends BaseFragment {
         status.setPadding(0, AndroidUtilities.dp(4), 0, AndroidUtilities.dp(12));
         box.addView(status);
 
-        final Button probe = new Button(context);
+        final Button probe = button(context);
         probe.setText(Brand.t("Проверить прямое соединение", "Check direct connection"));
         probe.setOnClickListener(v -> {
             probe.setEnabled(false);
@@ -169,7 +172,7 @@ public class BypassActivity extends BaseFragment {
                 });
             }).start();
         });
-        box.addView(probe, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        box.addView(probe, row());
 
         final TextView about = text(context, Brand.t(
                 Brand.name + " — неофициальный клиент на открытом исходном коде Telegram для Android. Мы не связаны с Telegram. "
@@ -311,12 +314,11 @@ public class BypassActivity extends BaseFragment {
                 }
                 donorBox.removeAllViews();
                 for (SharedSignIn.Donor d : list) {
-                    final Button b = new Button(donorBox.getContext());
-                    b.setAllCaps(false);
+                    final Button b = button(donorBox.getContext());
                     b.setText(d.name.isEmpty() ? Brand.t("Войти через «" + d.label + "»", "Sign in through “" + d.label + "”")
                             : Brand.t("Продолжить как " + d.name + " — через «" + d.label + "»", "Continue as " + d.name + " — through “" + d.label + "”"));
                     b.setOnClickListener(v -> startLogin(d));
-                    donorBox.addView(b, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+                    donorBox.addView(b, row());
                 }
                 showDonors();
             });
@@ -338,6 +340,25 @@ public class BypassActivity extends BaseFragment {
         ThemeBind.textColor(t, Theme.key_windowBackgroundWhiteBlueText4);
         t.setOnClickListener(v -> intro.presentFragment(new BypassActivity()));
         parent.addView(t, LayoutHelper.createFrame(LayoutHelper.WRAP_CONTENT, 36, Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL, 0, 0, 0, 8));
+    }
+
+    /** Buttons in the colours of the chosen theme (the system's grey ones are unreadable on a dark page). */
+    private static Button button(Context c) {
+        final Button b = new Button(c);
+        b.setAllCaps(false);
+        b.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 15);
+        b.setTextColor(Theme.getColor(Theme.key_featuredStickers_buttonText));
+        b.setStateListAnimator(null);
+        b.setPadding(AndroidUtilities.dp(14), AndroidUtilities.dp(10), AndroidUtilities.dp(14), AndroidUtilities.dp(10));
+        b.setBackground(Theme.createSimpleSelectorRoundRectDrawable(AndroidUtilities.dp(10), Theme.getColor(Theme.key_featuredStickers_addButton),
+                Theme.getColor(Theme.key_featuredStickers_addButtonPressed)));
+        return b;
+    }
+
+    private static LinearLayout.LayoutParams row() {
+        final LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        p.bottomMargin = AndroidUtilities.dp(8);
+        return p;
     }
 
     private static TextView text(Context c, String s, int sp, int color) {

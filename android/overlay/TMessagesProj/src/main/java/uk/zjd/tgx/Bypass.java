@@ -324,8 +324,12 @@ public final class Bypass {
         if (ctx == null || userProxyInUse()) {
             return;
         }
-        if (profileCount() == 0 && mtprotoCount() == 0) {
-            return;   // nothing to bypass with: tick() offers the sign-in
+        if (profileCount() == 0 && mtprotoCount() == 0) {   // nothing to bypass with: tick() offers the sign-in
+            active = false;
+            if (ourProxyIsCurrent()) {
+                disableTelegramProxy();   // saved by an earlier run: it points at a local port nobody listens on
+            }
+            return;
         }
         note("enable: " + why);
         active = true;

@@ -159,6 +159,7 @@ function check-signin($dir, $line) {
   stop-donors
   $t = run-signin $dir 'code' 'telegram state 2 \(bypass\)' 120
   if ($t -match 'sign-in: 0 program') { ok "${line}: no donors — nothing offered" } else { bad "${line}: no donors" }
+  if ($t -match 'offer: sign in for the bypass') { ok "${line}: Telegram blocked and no servers — the sign-in is offered" } else { bad "${line}: no offer of the sign-in" }
   if ($t -match 'sign-in: done') { ok "${line}: sign-in by the device code" } else { bad "${line}: sign-in by the device code" }
   if ($t -match 'profiles from the account: 1 xray') { ok "${line}: bypass servers of the account arrived" } else { bad "${line}: no bypass servers" }
   if ($t -match 'telegram state 2 \(bypass\)') { ok "${line}: Telegram connected through the account's bypass" } else { bad "${line}: no connection through the account's bypass" }
