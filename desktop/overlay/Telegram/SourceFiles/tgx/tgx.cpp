@@ -695,7 +695,7 @@ private:
 			then(QString());
 			return;
 		}
-		const auto body = QJsonDocument(QJsonObject{ { u"refresh_token"_q, _refresh } }).toJson(QJsonDocument::Compact);
+		const auto body = QJsonDocument(QJsonObject{ { u"refresh_token"_q, _refresh }, { u"rotate"_q, true } }).toJson(QJsonDocument::Compact);
 		request(u"POST"_q, u"/cabinet/auth/refresh"_q, body, QString(), [=](int code, QByteArray answer) {
 			if (code == 200) {
 				apply(QJsonDocument::fromJson(answer).object());

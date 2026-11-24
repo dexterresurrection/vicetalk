@@ -17,6 +17,8 @@ bad()  { echo "FAIL $*" | tee -a "$SUM"; FAILS=$((FAILS+1)); }
 note() { echo "--   $*" | tee -a "$SUM"; }
 shot() { timeout 30 adb exec-out screencap -p > "$R/$1.png" 2>/dev/null || true; }
 PKG=uk.zjd.cloudtalk
+adb shell settings put global hide_error_dialogs 1 >/dev/null 2>&1
+adb shell settings put secure anr_show_background 0 >/dev/null 2>&1
 note "Android $(adb shell getprop ro.build.version.release | tr -d '\r') (API $(adb shell getprop ro.build.version.sdk | tr -d '\r')), ABI $(adb shell getprop ro.product.cpu.abilist | tr -d '\r')"
 
 wait_log() {   # wait_log <regex> <seconds>
@@ -30,9 +32,28 @@ wait_log() {   # wait_log <regex> <seconds>
 
 
 ui_dump() { adb shell uiautomator dump /sdcard/ui.xml >/dev/null 2>&1; adb exec-out cat /sdcard/ui.xml 2>/dev/null; }
+dismiss_system() {   # "Pixel Launcher isn't responding" of a slow runner covers our window
+  if ui_dump | grep -q "isn't responding"; then
+    tap_xy "Wait" ; echo "--   system ANR window dismissed" | tee -a "$SUM"
+  fi
+}
+tap_xy() {
+  local xy
+  xy=$(ui_dump | python3 -c '
+import re, sys
+x, want = sys.stdin.read(), sys.argv[1]
+for m in re.finditer(r"<node [^>]*>", x):
+    n = m.group(0)
+    t = re.search(r" text=\"([^\"]*)\"", n); b = re.search(r"bounds=\"\[(\d+),(\d+)\]\[(\d+),(\d+)\]\"", n)
+    if t and b and t.group(1) == want:
+        x1, y1, x2, y2 = map(int, b.groups()); print((x1 + x2) // 2, (y1 + y2) // 2); break
+' "$1")
+  [ -n "$xy" ] && adb shell input tap $xy
+}
 tap_text() {   # tap_text <regex> [seconds]: waits for a node whose text matches (case-insensitive) and taps its centre
   local end=$((SECONDS + ${2:-20})) xy
   while [ $SECONDS -lt $end ]; do
+    dismiss_system
     xy=$(ui_dump | python3 -c '
 import re, sys
 x, want = sys.stdin.read(), re.compile(sys.argv[1], re.I)

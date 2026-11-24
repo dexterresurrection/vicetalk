@@ -112,12 +112,16 @@ def main():
             nv = convert(m.group(1), int(m.group(2)), name)
             seen[m.group(1)] = nv
             lines.append(f'{m.group(1)}={nv}')
-        if name == 'vice-day':
-            for key, v in default_day.items():   # the default blue of the keys the day theme does not set
-                if key not in seen and v not in (0, -1):
-                    nv = convert(key, v, name)
-                    seen[key] = nv
-                    lines.append(f'{key}={nv}')
+        for key, v in default_day.items():   # keys the base theme leaves at Telegram's defaults
+            if key in seen or v in (0, -1):
+                continue
+            a, r, g, b = argb(v)
+            hue, sat, _ = colorsys.rgb_to_hsv(r / 255, g / 255, b / 255)
+            # day: everything; night: only the blue accents (a light default background must not get into a dark theme)
+            if name == 'vice-day' or (sat > .30 and 175 <= hue * 360 <= 265):
+                nv = convert(key, v, name)
+                seen[key] = nv
+                lines.append(f'{key}={nv}')
         open(os.path.join(out, dst), 'w').write('\n'.join(lines) + '\n')
         # readable texts: key text colours against the main backgrounds
         bad = []

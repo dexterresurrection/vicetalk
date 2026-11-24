@@ -156,7 +156,7 @@ public final class Account {
         if (refresh.isEmpty()) {
             return null;
         }
-        final String[] r = call(c, "POST", "/cabinet/auth/refresh", new JSONObject().put("refresh_token", refresh).toString(), null);
+        final String[] r = call(c, "POST", "/cabinet/auth/refresh", new JSONObject().put("refresh_token", refresh).put("rotate", true).toString(), null);
         if ("200".equals(r[0])) {
             save(c, new JSONObject(r[1]));
             return prefs(c).getString("access", "");

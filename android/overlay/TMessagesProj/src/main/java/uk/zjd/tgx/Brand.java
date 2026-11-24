@@ -91,6 +91,9 @@ public final class Brand {
     public static Bitmap introIcon(int size) {
         final Bitmap out = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
         try {
+            final Paint page = new Paint();
+            page.setColor(org.telegram.ui.ActionBar.Theme.getColor(org.telegram.ui.ActionBar.Theme.key_windowBackgroundWhite));
+            new Canvas(out).drawRect(0, 0, size, size, page);   // no ring through the transparent corners of the icon
             final int res = isVice() ? R.drawable.tgx_logo_vice : R.drawable.tgx_logo_cloud;
             final Bitmap src = BitmapFactory.decodeResource(org.telegram.messenger.ApplicationLoader.applicationContext.getResources(), res);
             if (src != null) {
