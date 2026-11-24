@@ -38,7 +38,7 @@ signin_check() {
   # ---- donors: one of our account, an older one, another service, a fake with a wrong certificate
   for d in ci-vpn ci-old ci-wave ci-fake; do adb install ci/donors/$d.apk >/dev/null 2>&1 || bad "sign-in: install $d"; done
   start_app
-  sleep 8; tap_text "(not now|не сейчас)" 6
+  wait_log "offer: sign in for the bypass" 60 >/dev/null; tap_text "(not now|не сейчас)" 20
   if open_bypass; then ok "sign-in: the bypass opens from the first screen"; else bad "sign-in: no «Bypass» on the first screen"; shot signin-intro; fi
   if wait_log "sign-in: 2 app.s. can confirm" 20 >/dev/null; then ok "donors: two of four are offered"; else bad "donors: $(adb logcat -d -s tgx:I | grep 'can confirm' | tail -1)"; fi
   if wait_ui "Continue as CI Anna — through “CI VPN”" 15; then ok "donors: «Continue as CI Anna — through CI VPN»"; else bad "donors: no button"; fi
@@ -68,7 +68,7 @@ signin_check() {
   # ---- the Vice line over it: another service, the CloudVPN session and servers are not used
   if adb install -r ci/signin-vice.apk >/dev/null 2>&1; then ok "sign-in: Vice test build over Cloud"; else bad "sign-in: Vice install"; return; fi
   start_app
-  sleep 10; tap_text "(not now|не сейчас)" 8
+  wait_log "offer: sign in for the bypass" 60 >/dev/null; tap_text "(not now|не сейчас)" 20
   open_bypass
   if wait_log "sign-in: 1 app.s. can confirm" 20 >/dev/null && wait_ui "Continue as CI Vera — through “CI Wave”" 15; then ok "Vice: only the app with an account of vice.zjd.uk is offered"; else bad "Vice: $(adb logcat -d -s tgx:I | grep 'can confirm' | tail -1)"; fi
   if ui_has "Vice VPN account: |CI VPN|CI Old"; then bad "Vice: the CloudVPN account is used"; else ok "Vice: not signed in by the CloudVPN session"; fi
