@@ -107,6 +107,7 @@ public final class Bypass {
         bg.post(Bypass::refreshProfiles);
         ui.post(() -> {
             try {
+                SharedConfig.loadProxyList();   // currentProxy is empty until then: the person's own proxy or our stale one
                 addMtprotoFallbacks();
             } catch (Throwable e) {
                 FileLog.e(e);
