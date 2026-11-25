@@ -19,13 +19,22 @@ import java.net.URL;
 import java.nio.charset.StandardCharsets;
 
 /**
- * CloudVPN account (Vice VPN in the Vice line): the bypass is part of the subscription. Sign-in by a device code confirmed
- * by another app of ours on this phone (SharedSignIn), in the cabinet or in the bot: POST /cabinet/auth/device/request → the person confirms the code →
- * POST /cabinet/auth/deeplink/poll returns the tokens. The bypass profiles come from GET /cabinet/app/talk-profile
- * (Xray outbounds of the person's own subscription, no extra device slot, plus our MTProto proxies).
+ * The account the bypass comes from (it is part of the subscription): CloudVPN (cabinet.zjd.uk) or, in the Vice line, a
+ * choice of Vice VPN (vice.zjd.uk) and CloudVPN. One session at a time, its account is written next to it; the account
+ * can be changed only without a session, and the change leaves nothing of the former one. A token goes only to the
+ * addresses of its own account: every request takes the account and the token together.
+ *
+ * Sign-in by a device code confirmed by another app of ours on this phone (SharedSignIn), in the cabinet or in the bot:
+ * POST /cabinet/auth/device/request → the person confirms the code → POST /cabinet/auth/deeplink/poll returns the tokens.
+ * The bypass servers come from GET /cabinet/app/talk-profile (Xray outbounds of the person's own subscription, no extra
+ * device slot, plus our MTProto proxies).
  */
 public final class Account {
-    private static volatile int loginRun;   // 0 — no sign-in in progress, otherwise the number of the current one
+    public static final String CLOUD = "cloud", VICE = "vice";
+    private static final Object LOCK = new Object();      // prefs and gen
+    private static final Object REFRESH = new Object();   // one refresh at a time
+    private static int gen;                               // grows with every sign-in, sign-out and change of the account
+    private static volatile int loginRun;                 // 0 — no sign-in in progress, otherwise the number of the current one
     private static int loginCount;
 
     public interface LoginListener {
@@ -37,31 +46,70 @@ public final class Account {
     private Account() {
     }
 
-    /** The account of our line: CloudVPN (cabinet.zjd.uk) or Vice VPN (vice.zjd.uk). */
-    static String origin() {
-        return Brand.isVice() ? SharedSignIn.VICE : SharedSignIn.CLOUD;
-    }
-
-    /** Addresses of that account's cabinet (the second one is reachable through the Russian relay). */
-    private static String[] origins(Context c) {
-        final String test = Brand.json.optString("test_origin", "");
-        if (!test.isEmpty() && OurApps.testBuild(c)) {
-            return new String[]{test};
-        }
-        return Brand.isVice() ? new String[]{SharedSignIn.VICE} : new String[]{SharedSignIn.CLOUD, SharedSignIn.CLOUD_MIRROR};
-    }
-
-    /** Sessions of the two accounts are kept apart: after switching the line the other account's token is never used. */
     private static SharedPreferences prefs(Context c) {
-        return c.getSharedPreferences(Brand.isVice() ? "tgx_account_vice" : "tgx_account", Context.MODE_PRIVATE);
-    }
-
-    public static String title() {
-        return Brand.isVice() ? "Vice VPN" : "CloudVPN";
+        return c.getSharedPreferences("tgx_account", Context.MODE_PRIVATE);
     }
 
     public static boolean loggedIn(Context c) {
         return !prefs(c).getString("refresh", "").isEmpty();
+    }
+
+    /** Whose session it is; without a session — the one chosen for the sign-in. A session without a mark is CloudVPN. */
+    public static String current(Context c) {
+        final String stored = prefs(c).getString("account", "");
+        if (loggedIn(c)) {
+            return VICE.equals(stored) ? VICE : CLOUD;
+        }
+        return Brand.isVice() && !CLOUD.equals(stored) ? VICE : CLOUD;
+    }
+
+    /** What there is to choose from: the Cloud line has one account. */
+    public static String[] choices() {
+        return Brand.isVice() ? new String[]{VICE, CLOUD} : new String[]{CLOUD};
+    }
+
+    public static String title(String account) {
+        return VICE.equals(account) ? "Vice VPN" : "CloudVPN";
+    }
+
+    public static String title(Context c) {
+        return title(current(c));
+    }
+
+    /** Called once per line at start: an app that stood as the Cloud line before keeps the CloudVPN account by default. */
+    static void lineChanged(Context c, boolean firstStart) {
+        final SharedPreferences p = prefs(c);
+        if (!firstStart && !p.contains("account")) {
+            p.edit().putString("account", CLOUD).apply();
+        }
+    }
+
+    /** The choice before the sign-in; with a session nothing changes (sign out first). */
+    public static boolean choose(Context c, String account) {
+        synchronized (LOCK) {
+            if (loggedIn(c) || account.equals(current(c))) {
+                return !loggedIn(c);
+            }
+            loginRun = 0;
+            gen++;
+            prefs(c).edit().clear().putString("account", account).apply();
+        }
+        Bypass.clearProfiles();
+        Bypass.note("account: " + account);
+        return true;
+    }
+
+    static String origin(Context c) {
+        return VICE.equals(current(c)) ? SharedSignIn.VICE : SharedSignIn.CLOUD;
+    }
+
+    /** Addresses of an account's cabinet (the mirror of CloudVPN is reachable through the Russian relay). */
+    private static String[] origins(Context c, String account) {
+        final String test = Brand.json.optString(VICE.equals(account) ? "test_origin_vice" : "test_origin", "");
+        if (!test.isEmpty() && OurApps.testBuild(c)) {
+            return new String[]{test};
+        }
+        return VICE.equals(account) ? new String[]{SharedSignIn.VICE} : new String[]{SharedSignIn.CLOUD, SharedSignIn.CLOUD_MIRROR};
     }
 
     public static String userName(Context c) {
@@ -69,7 +117,12 @@ public final class Account {
     }
 
     public static void logout(Context c) {
-        prefs(c).edit().clear().apply();
+        synchronized (LOCK) {
+            final String account = current(c);   // the next sign-in offers the same account
+            loginRun = 0;
+            gen++;
+            prefs(c).edit().clear().putString("account", account).apply();
+        }
         Bypass.clearProfiles();
     }
 
@@ -77,16 +130,17 @@ public final class Account {
         loginRun = 0;
     }
 
-    /** Device-code sign-in; listener calls arrive on the UI thread, none of them after cancelLogin(). */
+    /** Device-code sign-in to the chosen account; listener calls arrive on the UI thread, none of them after cancelLogin(). */
     public static void startLogin(Context ctx, LoginListener l) {
         final Context c = ctx.getApplicationContext();
         final int run = ++loginCount;
         loginRun = run;
+        final String account = current(c);
         new Thread(() -> {
             String error;
             boolean ok = false;
             try {
-                final JSONObject d = new JSONObject(call(c, "POST", "/cabinet/auth/device/request", "{}", null)[1]);
+                final JSONObject d = new JSONObject(call(c, account, "POST", "/cabinet/auth/device/request", "{}", null)[1]);
                 final String token = d.getString("token");
                 report(run, () -> l.onCode(d.optString("user_code"), d.optString("verification_url"), d.isNull("telegram_url") ? "" : d.optString("telegram_url")));
                 final long until = System.currentTimeMillis() + d.optInt("expires_in", 600) * 1000L;
@@ -97,20 +151,21 @@ public final class Account {
                     if (loginRun != run) {
                         return;
                     }
-                    final String[] r = call(c, "POST", "/cabinet/auth/deeplink/poll", new JSONObject().put("token", token).toString(), null);
-                    if (loginRun != run) {
-                        return;   // cancelled meanwhile: the new session is not kept
-                    }
+                    final String[] r = call(c, account, "POST", "/cabinet/auth/deeplink/poll", new JSONObject().put("token", token).toString(), null);
                     if ("200".equals(r[0])) {
                         final JSONObject a = new JSONObject(r[1]);
-                        final JSONObject u = a.optJSONObject("user");
-                        save(c, a);
-                        if (u != null) {
-                            final String name = u.optString("first_name", u.optString("username", ""));
-                            prefs(c).edit().putString("name", name).apply();
+                        synchronized (LOCK) {
+                            if (loginRun != run) {
+                                return;   // cancelled or another account chosen meanwhile: the new session is not kept
+                            }
+                            gen++;
+                            final JSONObject u = a.optJSONObject("user");
+                            prefs(c).edit().clear().putString("account", account)
+                                    .putString("name", u == null ? "" : u.optString("first_name", u.optString("username", ""))).apply();
+                            save(c, a);
                         }
                         ok = true;
-                        Bypass.note("sign-in: done");
+                        Bypass.note("sign-in: done (" + account + ")");
                         error = fetchProfile(c);
                         break;
                     }
@@ -138,18 +193,32 @@ public final class Account {
         });
     }
 
-    /** Downloads the bypass profiles of this account. Returns null on success or a message for the person. Any thread but UI. */
+    /** Downloads the bypass servers of this account. Returns null on success or a message for the person. Any thread but UI. */
     public static String fetchProfile(Context c) {
         try {
-            final String access = access(c);
-            if (access == null) {
-                return Brand.t("Войдите в аккаунт " + title(), "Sign in to your " + title() + " account");
+            final String account;
+            final int g;
+            synchronized (LOCK) {
+                account = current(c);
+                g = gen;
             }
-            final String[] r = call(c, "GET", "/cabinet/app/talk-profile", null, access);
-            if ("200".equals(r[0])) {
-                Bypass.saveProfiles(r[1]);
-                prefs(c).edit().putLong("profile_at", System.currentTimeMillis()).apply();
-                return null;
+            final String access = access(c, account, g);
+            if (access == null) {
+                return Brand.t("Войдите в аккаунт " + title(account), "Sign in to your " + title(account) + " account");
+            }
+            final String[] r = call(c, account, "GET", "/cabinet/app/talk-profile", null, access);
+            synchronized (LOCK) {
+                if (gen != g) {
+                    return null;   // signed out or another account meanwhile: these servers are not used
+                }
+                if ("200".equals(r[0])) {
+                    Bypass.saveProfiles(r[1]);
+                    prefs(c).edit().putLong("profile_at", System.currentTimeMillis()).apply();
+                    return null;
+                }
+                if ("401".equals(r[0])) {
+                    prefs(c).edit().remove("access").apply();
+                }
             }
             String err = "";
             try {
@@ -158,15 +227,12 @@ public final class Account {
             }
             switch (err) {
                 case "no_device":
-                    return Brand.t("Сначала подключите " + title() + " на любом устройстве — обход берёт серверы вашей подписки",
-                            "Connect " + title() + " on any device first — the bypass uses the servers of your subscription");
+                    return Brand.t("Сначала подключите " + title(account) + " на любом устройстве — обход берёт серверы вашей подписки",
+                            "Connect " + title(account) + " on any device first — the bypass uses the servers of your subscription");
                 case "subscription_inactive":
                 case "no_subscription":
-                    return Brand.t("Подписка " + title() + " не активна — обход входит в подписку", "Your " + title() + " subscription is not active");
+                    return Brand.t("Подписка " + title(account) + " не активна — обход входит в подписку", "Your " + title(account) + " subscription is not active");
                 default:
-                    if ("401".equals(r[0])) {
-                        prefs(c).edit().remove("access").apply();
-                    }
                     return Brand.t("Кабинет ответил ", "The cabinet answered ") + r[0];
             }
         } catch (Throwable e) {
@@ -188,36 +254,55 @@ public final class Account {
         e.apply();
     }
 
-    private static synchronized String access(Context c) throws Exception {
-        final SharedPreferences p = prefs(c);
-        if (!p.getString("access", "").isEmpty() && p.getLong("access_until", 0) > System.currentTimeMillis()) {
-            return p.getString("access", "");
-        }
-        final String refresh = p.getString("refresh", "");
-        if (refresh.isEmpty()) {
+    /** The access token of exactly that session (account + generation); null — it is not there any more. */
+    private static String access(Context c, String account, int g) throws Exception {
+        synchronized (REFRESH) {
+            final String refresh;
+            synchronized (LOCK) {
+                if (gen != g) {
+                    return null;
+                }
+                final SharedPreferences p = prefs(c);
+                if (!p.getString("access", "").isEmpty() && p.getLong("access_until", 0) > System.currentTimeMillis()) {
+                    return p.getString("access", "");
+                }
+                refresh = p.getString("refresh", "");
+            }
+            if (refresh.isEmpty()) {
+                return null;
+            }
+            final String[] r = call(c, account, "POST", "/cabinet/auth/refresh", new JSONObject().put("refresh_token", refresh).put("rotate", true).toString(), null);
+            synchronized (LOCK) {
+                if (gen != g) {
+                    return null;
+                }
+                if ("200".equals(r[0])) {
+                    final JSONObject a = new JSONObject(r[1]);
+                    save(c, a);
+                    return a.optString("access_token");
+                }
+                if (!"401".equals(r[0])) {
+                    return null;   // no connection or a fault of the cabinet is not a sign-out
+                }
+                gen++;   // signed out in the cabinet
+                prefs(c).edit().clear().putString("account", account).apply();
+            }
+            Bypass.clearProfiles();
             return null;
         }
-        final String[] r = call(c, "POST", "/cabinet/auth/refresh", new JSONObject().put("refresh_token", refresh).put("rotate", true).toString(), null);
-        if ("200".equals(r[0])) {
-            save(c, new JSONObject(r[1]));
-            return prefs(c).getString("access", "");
-        }
-        if ("401".equals(r[0])) {
-            p.edit().clear().apply();   // signed out in the cabinet
-        }
-        return null;
     }
 
-    /** {code, body}; tries our origins in order (the second one is reachable through the Russian relay). */
-    private static String[] call(Context c, String method, String path, String body, String bearer) throws Exception {
+    /** {code, body}; the addresses of that account in order. */
+    private static String[] call(Context c, String account, String method, String path, String body, String bearer) throws Exception {
         Exception last = null;
-        for (String origin : origins(c)) {
+        for (String origin : origins(c, account)) {
             HttpURLConnection h = null;
             try {
                 h = (HttpURLConnection) new URL(origin + "/api" + path).openConnection();
                 h.setConnectTimeout(8000);
                 h.setReadTimeout(20000);
                 h.setRequestMethod(method);
+                h.setInstanceFollowRedirects(false);   // a token never follows a redirect to another address
                 h.setRequestProperty("User-Agent", Brand.name + " Android");
                 h.setRequestProperty("x-device-os", "Android");
                 h.setRequestProperty("x-device-model", Build.MODEL);

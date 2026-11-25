@@ -33,7 +33,7 @@ def main():
             pre = 'setup' if i == 0 else 'vice'
             args += ['--input', f'{pre}_url={pr.BUCKET_URL}/{key}', '--input', f'{pre}_sha={sha}']
         print('installers in the bucket (temporary):', len(keys), flush=True)
-        return subprocess.run([sys.executable, os.path.join(HERE, 'gh_run.py'), 'tgx-win-check.yml', out, '--wait-min', '60'] + args).returncode
+        return subprocess.run([sys.executable, os.path.join(HERE, 'gh_run.py'), 'tgx-win-check.yml', out, '--wait-min', '110'] + args).returncode
     finally:
         for key in keys:
             try:

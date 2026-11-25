@@ -54,6 +54,8 @@ class H(BaseHTTPRequestHandler):
         n = int(self.headers.get('Content-Length') or 0)
         d = json.loads(self.rfile.read(n) or b'{}')
         p = self.path
+        if p == '/issue':   # for the check: a session made elsewhere
+            return self.out(200, {'refresh_token': session()['refresh_token']})
         if p == '/api/cabinet/auth/device/request':
             code = '-'.join(secrets.token_hex(2).upper() for _ in range(2))
             token = secrets.token_hex(16)

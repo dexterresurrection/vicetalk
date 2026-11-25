@@ -17,7 +17,8 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 
 public class Donor extends ContentProvider {
-    static final String ORIGIN = "@ORIGIN@", NAME = "@NAME@", CABINET = "http://10.0.2.2:8081";
+    static final String ORIGIN = "@ORIGIN@", NAME = "@NAME@",
+            CABINET = "http://10.0.2.2:" + ("@ORIGIN@".contains("vice.zjd.uk") ? 8082 : 8081);
 
     @Override
     public boolean onCreate() {

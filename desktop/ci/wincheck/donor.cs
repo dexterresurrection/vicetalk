@@ -29,7 +29,7 @@ static class Donor {
 							var m = Regex.Match(line, "\"code\":\"([^\"]+)\"");
 							using (var w = new WebClient()) {
 								w.Headers["Authorization"] = "Bearer donor";
-								w.UploadString("http://127.0.0.1:8081/api/cabinet/auth/device/approve", "{\"user_code\":\"" + m.Groups[1].Value + "\"}");
+								w.UploadString("http://127.0.0.1:" + (origin.Contains("vice.zjd.uk") ? "8082" : "8081") + "/api/cabinet/auth/device/approve", "{\"user_code\":\"" + m.Groups[1].Value + "\"}");
 							}
 							answer = "{\"ok\":true" + o + "}";
 						} else {

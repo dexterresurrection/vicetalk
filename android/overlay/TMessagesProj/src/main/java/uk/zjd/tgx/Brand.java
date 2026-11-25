@@ -76,9 +76,7 @@ public final class Brand {
             return;
         }
         own.edit().putString("line", line).apply();
-        if (before != null) {   // the other line has another account: its bypass servers are not used here
-            new java.io.File(ctx.getFilesDir(), "tgx/profiles.json").delete();
-        }
+        Account.lineChanged(ctx, before == null);
         final boolean chosen = main.contains("theme") && before == null || own.getBoolean("theme_chosen", false);
         if (chosen) {
             return;

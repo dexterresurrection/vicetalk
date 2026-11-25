@@ -28,12 +28,13 @@ public final class SharedSignIn {
     static final String CLOUD = "https://cabinet.zjd.uk", CLOUD_MIRROR = "https://cabinet.0nn.us", VICE = "https://vice.zjd.uk";
 
     public static final class Donor {
-        final String pkg, label, name;
+        final String pkg, label, name, origin;
 
-        Donor(String pkg, String label, String name) {
+        Donor(String pkg, String label, String name, String origin) {
             this.pkg = pkg;
             this.label = label;
             this.name = name;
+            this.origin = origin;
         }
     }
 
@@ -48,14 +49,15 @@ public final class SharedSignIn {
         return VICE.equals(origin) ? "vice" : null;
     }
 
-    /** Our apps that are signed in to the account of our line. Any thread but UI. */
+    /** Our apps that are signed in to the account chosen here. Any thread but UI. */
     public static List<Donor> donors(Context c) {
+        final String origin = Account.origin(c);
         final List<Donor> out = new ArrayList<>();
         for (String pkg : OurApps.all(c).keySet()) {
             if (pkg.equals(c.getPackageName())) {
                 continue;
             }
-            final Donor d = ask(c, pkg);
+            final Donor d = ask(c, pkg, origin);
             if (d != null) {
                 out.add(d);
             }
@@ -66,10 +68,10 @@ public final class SharedSignIn {
 
     /** Asks one app again right before its window opens: it could have been replaced or signed out meanwhile. */
     public static boolean stillThere(Context c, Donor d) {
-        return ask(c, d.pkg) != null;
+        return ask(c, d.pkg, d.origin) != null;
     }
 
-    private static Donor ask(Context c, String pkg) {
+    private static Donor ask(Context c, String pkg, String origin) {
         try {
             // the certificate is compared before the first contact: a fake app does not learn that it was asked
             if (!OurApps.verify(c, pkg)) {
@@ -82,7 +84,7 @@ public final class SharedSignIn {
                 return null;
             }
             final Bundle in = new Bundle();
-            in.putString("origin", Account.origin());
+            in.putString("origin", origin);
             final Bundle b;
             final ContentProviderClient client = c.getContentResolver().acquireUnstableContentProviderClient(Uri.parse("content://" + authority));
             if (client == null) {
@@ -97,11 +99,11 @@ public final class SharedSignIn {
                 return null;
             }
             // an app older than this field knows nothing about the second service and answers for the first one
-            final String theirs = account(b.getString("origin", CLOUD)), ours = account(Account.origin());
+            final String theirs = account(b.getString("origin", CLOUD)), ours = account(origin);
             if (ours == null || !ours.equals(theirs)) {
                 return null;
             }
-            return new Donor(pkg, clean(pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString()), clean(b.getString("name")));
+            return new Donor(pkg, clean(pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString()), clean(b.getString("name")), origin);
         } catch (Throwable e) {
             return null;
         }
@@ -118,7 +120,7 @@ public final class SharedSignIn {
     /** For startActivityForResult: the other app checks our certificate, asks the person once and confirms the code. */
     public static Intent approveIntent(Donor d, String userCode) {
         return new Intent(ACTION).setComponent(new ComponentName(d.pkg, APPROVE))
-                .putExtra("code", userCode).putExtra("origin", Account.origin());
+                .putExtra("code", userCode).putExtra("origin", d.origin);
     }
 
     /** Why the other app did not confirm, for the person. */

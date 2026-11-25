@@ -46,7 +46,8 @@ Start-Process C:\xrsrv\xray.exe -ArgumentList 'run','-c','C:\xrsrv\server.json' 
 Start-Sleep 2
 $outb = "{`"protocol`":`"vless`",`"settings`":{`"vnext`":[{`"address`":`"127.0.0.1`",`"port`":7443,`"users`":[{`"id`":`"$uuid`",`"flow`":`"xtls-rprx-vision`",`"encryption`":`"none`"}]}]},`"streamSettings`":{`"network`":`"tcp`",`"security`":`"reality`",`"realitySettings`":{`"serverName`":`"www.microsoft.com`",`"fingerprint`":`"chrome`",`"publicKey`":`"$pub`",`"shortId`":`"$sid`"}}}"
 # Telegram Desktop's public development keys (TDESKTOP_API_TEST) — CI only, never in a published build
-$talkcfg = "{`"api_id`":17349,`"api_hash`":`"344583e45741c457fe1862106095a5eb`",`"version`":`"0.1.0`",`"bypass`":{`"mode`":`"auto`",`"xray`":[$outb],`"mtproto`":[]}}"
+$ver = (Get-Content "$PSScriptRoot\..\..\..\VERSION" -First 1).Trim()
+$talkcfg = "{`"api_id`":17349,`"api_hash`":`"344583e45741c457fe1862106095a5eb`",`"version`":`"$ver`",`"bypass`":{`"mode`":`"auto`",`"xray`":[$outb],`"mtproto`":[]}}"
 $tgNets = '149.154.160.0/20','91.108.4.0/22','91.108.8.0/22','91.108.12.0/22','91.108.16.0/22','91.108.20.0/22','91.108.56.0/22','95.161.64.0/20','185.76.151.0/24','2001:67c:4e8::/48','2001:b28:f23d::/48','2001:b28:f23f::/48'
 
 # an older exe keeps its data next to itself for an administrator: the check can send it to AppData explicitly
@@ -96,10 +97,13 @@ function run-line($dir, $line, $name) {
 
 # ---------- shared sign-in (only the asking side): a fake cabinet, test donors in Program Files as our programs are
 $tgx = "$env:APPDATA\Cloud Talk\tdata\tgx"
-$cab = "$R\cabinet.log"
+$cabs = @{ cloud = "$R\cabinet.log"; vice = "$R\cabinet-vice.log" }; $ports = @{ cloud = 8081; vice = 8082 }
 New-Item -ItemType Directory -Force C:\cab, C:\donor, C:\donorfake | Out-Null
 "{`"xray`":[$outb],`"mtproto`":[]}" | Out-File C:\cab\talk-profile.json -Encoding ascii
-$null = Start-Process python -ArgumentList "$PWD\..\..\..\android\ci\signin\fake_cabinet.py",'8081','C:\cab\talk-profile.json',$cab -PassThru -WindowStyle Hidden
+foreach ($x in 'cloud','vice') {
+  New-Item -ItemType File -Force $cabs[$x] | Out-Null
+  $null = Start-Process python -ArgumentList "$PWD\..\..\..\android\ci\signin\fake_cabinet.py","$($ports[$x])",'C:\cab\talk-profile.json',$cabs[$x] -PassThru -WindowStyle Hidden
+}
 & C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe /nologo /target:winexe /out:C:\donor\donor.exe "$PWD\donor.cs" | Out-String | Write-Host
 if (-not (Test-Path C:\donor\donor.exe)) { bad 'sign-in: the test donor did not compile' }
 function place-donor($key, $folder, $exe) {
@@ -120,7 +124,7 @@ function start-donors($mode) {
   Start-Sleep 2
 }
 function stop-donors { Stop-Process -Name CloudVPN, CloudMail, ViceWave, CloudMessenger -Force -ErrorAction SilentlyContinue; Start-Sleep 1 }
-function cab-count($re) { (Select-String -Path $cab -Pattern $re -ErrorAction SilentlyContinue | Measure-Object).Count }
+function cab-count($x, $re) { (Select-String -Path $cabs[$x] -Pattern $re -ErrorAction SilentlyContinue | Measure-Object).Count }
 place-donor 'CloudVPN' 'C:\Program Files\CI VPN' 'CloudVPN.exe'
 place-donor 'CloudMail' 'C:\Program Files\CI Mail' 'CloudMail.exe'
 place-donor 'ViceWave' 'C:\Program Files\CI Wave' 'ViceWave.exe'
@@ -128,19 +132,20 @@ place-donor 'CloudMessenger' 'C:\Program Files\CI Messenger' 'CloudMessenger.exe
 Copy-Item C:\donor\donor.exe C:\donorfake\CloudMessenger.exe -Force
 
 # Invoke-RestMethod gives a JSON array as one object: unrolled through a variable
-function pending-codes {
-  $x = Invoke-RestMethod http://127.0.0.1:8081/pending -ErrorAction SilentlyContinue
+function pending-codes($port) {
+  $x = Invoke-RestMethod "http://127.0.0.1:$port/pending" -ErrorAction SilentlyContinue
   return @($x | ForEach-Object { $_ } | Where-Object { $_ } | ForEach-Object { "$_" })
 }
 # starts the client with the given TGX_CI_SIGNIN until $until is in its log; returns the log
-function run-signin($dir, $mode, $until, $seconds, $keep = $false) {
-  $cfg = "{`"api_id`":17349,`"api_hash`":`"344583e45741c457fe1862106095a5eb`",`"version`":`"0.1.0`",`"test_origin`":`"http://127.0.0.1:8081`",`"bypass`":{`"mode`":`"auto`"}}"
+function run-signin($dir, $mode, $until, $seconds, $keep = $false, $service = 'cloud') {
+  $cfg = "{`"api_id`":17349,`"api_hash`":`"344583e45741c457fe1862106095a5eb`",`"version`":`"$ver`",`"test_origin`":`"http://127.0.0.1:8081`",`"test_origin_vice`":`"http://127.0.0.1:8082`",`"bypass`":{`"mode`":`"auto`"}}"
   $cfg | Out-File "$dir\talk.json" -Encoding ascii
   if (-not $keep) { Remove-Item "$tgx\account*.json", "$tgx\profiles*.json", "$tgx\bypass.json" -ErrorAction SilentlyContinue }
   $log = "$env:APPDATA\Cloud Talk\log.txt"
   Remove-Item $log -ErrorAction SilentlyContinue
-  $before = pending-codes   # codes of refused sign-ins stay there
+  $before = @(pending-codes $ports[$service])   # codes of refused sign-ins stay there
   $env:TGX_CI_SIGNIN = $mode
+  $env:TGX_CI_SERVICE = $service
   $null = start-talk "$dir\CloudTalk.exe"
   $env:TGX_CI_SIGNIN = ''
   $deadline = (Get-Date).AddSeconds($seconds); $t = ''; $approved = $false
@@ -148,9 +153,9 @@ function run-signin($dir, $mode, $until, $seconds, $keep = $false) {
     Start-Sleep 2
     $t = Get-Content $log -Raw -ErrorAction SilentlyContinue
     if ($mode -eq 'code' -and -not $approved) {   # «confirmed in the cabinet»
-      $pending = @(pending-codes | Where-Object { $before -notcontains $_ })
+      $pending = @(pending-codes $ports[$service] | Where-Object { $before -notcontains $_ })
       if ($pending.Count -gt 0) {
-        Invoke-RestMethod http://127.0.0.1:8081/api/cabinet/auth/device/approve -Method Post -Headers @{ Authorization = 'Bearer donor' } -Body (@{ user_code = "$($pending[-1])" } | ConvertTo-Json) | Out-Null
+        Invoke-RestMethod "http://127.0.0.1:$($ports[$service])/api/cabinet/auth/device/approve" -Method Post -Headers @{ Authorization = 'Bearer donor' } -Body (@{ user_code = "$($pending[-1])" } | ConvertTo-Json) | Out-Null
         $approved = $true
       }
     }
@@ -165,39 +170,47 @@ function run-signin($dir, $mode, $until, $seconds, $keep = $false) {
   return "$t"
 }
 $script:sshot = 0
-function check-signin($dir, $line) {
-  $vice = ($line -eq 'vice')
-  $first = if ($vice) { 'donor wave / CI Wave / CI Vera' } else { 'donor cloudvpn / CI VPN / CI Anna' }
+function check-signin($dir, $line, $service) {
+  $tag = if ($line -eq $service) { $line } else { "$line line, $service account" }
+  $other = if ($service -eq 'vice') { 'cloud' } else { 'vice' }
+  $first = if ($service -eq 'vice') { 'donor wave / CI Wave / CI Vera for vice' } else { 'donor cloudvpn / CI VPN / CI Anna for cloud' }
+  $o0 = cab-count $other '.'
   New-NetFirewallRule -DisplayName "talk-block-signin" -Direction Outbound -Program "$dir\CloudTalk.exe" -RemoteAddress $tgNets -Action Block | Out-Null
   stop-donors
-  $t = run-signin $dir 'code' 'telegram state 2 \(bypass\)' 120
-  if ($t -match 'sign-in: 0 program') { ok "${line}: no donors — nothing offered" } else { bad "${line}: no donors" }
-  if ($t -match 'offer: sign in for the bypass') { ok "${line}: Telegram blocked and no servers — the sign-in is offered" } else { bad "${line}: no offer of the sign-in" }
-  if ($t -match 'sign-in: done') { ok "${line}: sign-in by the device code" } else { bad "${line}: sign-in by the device code" }
-  if ($t -match 'profiles from the account: 1 xray') { ok "${line}: bypass servers of the account arrived" } else { bad "${line}: no bypass servers" }
-  if ($t -match 'telegram state 2 \(bypass\)') { ok "${line}: Telegram connected through the account's bypass" } else { bad "${line}: no connection through the account's bypass" }
-  if ((cab-count 'refresh ok rotate=True') -ge 1 -and (cab-count 'refresh 401') -eq 0) { ok "${line}: session renewed with rotate" } else { bad "${line}: refresh $(cab-count 'refresh ok rotate=True') ok, $(cab-count 'refresh 401') refused" }
+  $t = run-signin $dir 'code' 'telegram state 2 \(bypass\)' 120 $false $service
+  if ($t -match 'sign-in: 0 program' -and $t -notmatch 'sign-in: donor') { ok "${tag}: no donors — nothing offered" } else { bad "${tag}: no donors" }
+  if ($line -eq 'vice') {
+    if ($t -match 'sign-in: code vice' -and $t -match 'sign-in: code cloud') { ok "${tag}: both accounts can be chosen" } else { bad "${tag}: no choice of account" }
+  } elseif ($t -match 'sign-in: code vice') { bad "${tag}: the Vice account in the Cloud line" } else { ok "${tag}: the Cloud line has one account" }
+  if ($t -match 'offer: sign in for the bypass') { ok "${tag}: Telegram blocked and no servers — the sign-in is offered" } else { bad "${tag}: no offer of the sign-in" }
+  if ($t -match "sign-in: done \($service\)") { ok "${tag}: sign-in by the device code" } else { bad "${tag}: sign-in by the device code" }
+  if ($t -match 'profiles from the account: 1 xray') { ok "${tag}: bypass servers of the account arrived" } else { bad "${tag}: no bypass servers" }
+  if ($t -match 'telegram state 2 \(bypass\)') { ok "${tag}: Telegram connected through the account's bypass" } else { bad "${tag}: no connection through the account's bypass" }
+  if ((cab-count $service 'refresh ok rotate=True') -ge 1) { ok "${tag}: session renewed with rotate" } else { bad "${tag}: no refresh with rotate" }
+  $f = Get-Content "$tgx\account.json" -Raw -ErrorAction SilentlyContinue
+  if ($f -match 'refresh_protected' -and $f -notmatch '"refresh":|r-[0-9a-f]{16}' -and $f -match "`"account`":\s*`"$service`"") { ok "${tag}: the saved session is protected (DPAPI) and marked with its account" } else { bad "${tag}: account.json" }
   start-donors 'deny'
-  $done = cab-count 'poll: signed in'
-  $t = run-signin $dir 'through' 'sign-in: not confirmed' 60
-  if ($t -match [regex]::Escape($first)) { ok "${line}: offered: $first" } else { bad "${line}: not offered: $first" }
-  if ($t -match 'CI Mallory') { bad "${line}: a copy outside Program Files accepted" } else { ok "${line}: a copy outside Program Files — not offered" }
-  if ($t -match 'not our program behind the pipe of messenger') { ok "${line}: the log says why" } else { bad "${line}: no line about the fake" }
-  if ((Get-Content C:\donor\messenger.log -Raw) -match 'state|approve') { bad "${line}: the fake received a request" } else { ok "${line}: the fake received nothing" }
-  if ($vice) {
-    if ($t -match 'donor (cloudvpn|mail)') { bad 'vice: a CloudVPN account accepted' } else { ok 'vice: accounts of cabinet.zjd.uk (and older programs) — not offered' }
-  } else {
+  $done = cab-count $service 'poll: signed in'
+  $t = run-signin $dir 'through' 'sign-in: not confirmed' 60 $false $service
+  if ($t -match [regex]::Escape($first)) { ok "${tag}: offered: $first" } else { bad "${tag}: not offered: $first" }
+  if ($t -match 'CI Mallory') { bad "${tag}: a copy outside Program Files accepted" } else { ok "${tag}: a copy outside Program Files — not offered" }
+  if ($t -match 'not our program behind the pipe of messenger') { ok "${tag}: the log says why" } else { bad "${tag}: no line about the fake" }
+  if ((Get-Content C:\donor\messenger.log -Raw) -match 'state|approve') { bad "${tag}: the fake received a request" } else { ok "${tag}: the fake received nothing" }
+  if ($t -match 'donor wave[^\n]* for cloud|donor (cloudvpn|mail)[^\n]* for vice') { bad "${tag}: a program offered for the other account" } else { ok "${tag}: every program is offered only for its own account" }
+  if ($line -eq 'cloud') {
     if ($t -match 'donor wave') { bad 'cloud: an account of vice.zjd.uk accepted' } else { ok 'cloud: an account of vice.zjd.uk — not offered' }
-    if ($t -match 'donor mail / CI Old') { ok 'cloud: a program older than the field answers for CloudVPN' } else { bad 'cloud: the older program is missing' }
   }
-  if ($t -match 'sign-in: not confirmed' -and $t -notmatch 'sign-in: done' -and (cab-count 'poll: signed in') -eq $done) { ok "${line}: refusal — no session" } else { bad "${line}: refusal" }
-  $req = (Get-Content "C:\donor\$(if ($vice) { 'wave' } else { 'cloudvpn' }).log" -Raw)
-  if ($req -match '"approve"' -and $req -notmatch '"pub"') { ok "${line}: the request carries only the code and the service (no key is asked for)" } else { bad "${line}: request: $req" }
+  if ($t -match 'donor mail / CI Old / CI Anna for cloud') { ok "${tag}: a program older than the field answers for CloudVPN" } else { bad "${tag}: the older program is missing" }
+  if ($t -match 'sign-in: not confirmed' -and $t -notmatch 'sign-in: done' -and (cab-count $service 'poll: signed in') -eq $done) { ok "${tag}: refusal — no session" } else { bad "${tag}: refusal" }
+  $req = (Get-Content "C:\donor\$(if ($service -eq 'vice') { 'wave' } else { 'cloudvpn' }).log" -Raw)
+  if ($req -match '"approve"' -and $req -notmatch '"pub"') { ok "${tag}: the request carries only the code and the service (no key is asked for)" } else { bad "${tag}: request: $req" }
   start-donors 'allow'
-  $t = run-signin $dir 'through' 'profiles from the account' 60
-  if ($t -match 'confirmed by another program' -and $t -match 'sign-in: done') { ok "${line}: signed in through the other program" } else { bad "${line}: not signed in through the other program" }
-  if ($t -match '[0-9A-F]{4}-[0-9A-F]{4}\b.*\n' -and ($t -split "`n" | Select-String 'Tgx:.*[0-9A-F]{4}-[0-9A-F]{4}')) { bad "${line}: a code in the log" } else { ok "${line}: no codes in the log" }
+  $t = run-signin $dir 'through' 'profiles from the account' 60 $false $service
+  if ($t -match 'confirmed by another program' -and $t -match "sign-in: done \($service\)") { ok "${tag}: signed in through the other program" } else { bad "${tag}: not signed in through the other program" }
+  if ($t -split "`n" | Select-String 'Tgx:.*([0-9A-F]{4}-[0-9A-F]{4}|[ar]-[0-9a-f]{16})') { bad "${tag}: a code or a token in the log" } else { ok "${tag}: no codes and no tokens in the log" }
+  if ((cab-count $other '.') -eq $o0) { ok "${tag}: the cabinet of the other account was not asked" } else { bad "${tag}: requests to the cabinet of the other account" }
   stop-donors
+  Copy-Item "$tgx\account.json" "C:\cab\account-$service.json" -Force -ErrorAction SilentlyContinue
   Remove-Item "$tgx\account*.json", "$tgx\profiles*.json", "$tgx\bypass.json" -ErrorAction SilentlyContinue
   Remove-NetFirewallRule -DisplayName 'talk-block-signin' -ErrorAction SilentlyContinue
 }
@@ -210,13 +223,12 @@ if (fetch 'setup-url.txt' 'setup-sha.txt' "$env:TEMP\CloudTalk-Setup.exe") {
   if ((Get-Content "$dir\brand.json" -Raw) -match '"brand":"cloud"') { ok 'Cloud: brand.json cloud' } else { bad "Cloud: brand.json $(Get-Content "$dir\brand.json" -Raw)" }
   if (Test-Path "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\Cloud Talk.lnk") { ok 'Cloud: Start menu shortcut' } else { note 'Cloud: no Start menu shortcut in ProgramData' }
   run-line $dir 'cloud' 'Cloud Talk'
-  check-signin $dir 'cloud'
+  check-signin $dir 'cloud' 'cloud'
 }
 # ---------- in-app update: an older version of the client (talk.json 0.0.9) downloads this installer and restarts itself
 if ($dir -and (Test-Path "$dir\CloudTalk.exe")) {
   New-Item -ItemType Directory -Force C:\updsrv | Out-Null
   $ver = (Get-Content "$dir\talk.json" -Raw | ConvertFrom-Json).version
-  if (-not $ver) { $ver = '0.1.0' }
   $setup = "CloudTalk-Setup-$ver.exe"
   Copy-Item "$env:TEMP\CloudTalk-Setup.exe" "C:\updsrv\$setup"
   $sha = (Get-FileHash "C:\updsrv\$setup" -Algorithm SHA256).Hash.ToLower()
@@ -264,11 +276,28 @@ if ((Test-Path 'vice-url.txt') -and (fetch 'vice-url.txt' 'vice-sha.txt' "$env:T
   if (-not (Test-Path 'C:\Program Files\Cloud Talk\CloudTalk.exe')) { ok 'Vice: Cloud line removed' } else { bad 'Vice: Cloud line still installed' }
   if ((Get-Content "$vdir\brand.json" -Raw) -match '"brand":"vice"') { ok 'Vice: brand.json vice' } else { bad 'Vice: brand.json' }
   run-line $vdir 'vice' 'Vice Talk'
-  # the Cloud session of the same data folder is not used by the Vice line
-  '{"refresh":"r-cloud","name":"CI Anna"}' | Out-File "$tgx\account.json" -Encoding ascii
-  $t = run-signin $vdir 'list' 'program\(s\) can confirm' 40 $true
-  if ((Test-Path "$tgx\account.json") -and $t -match 'can confirm' -and $t -notmatch 'profiles') { ok 'vice: the CloudVPN session is kept apart and not used' } else { bad 'vice: the CloudVPN session' }
-  check-signin $vdir 'vice'
+  # who was signed in as the Cloud line stays signed in, with the account and its servers
+  Copy-Item C:\cab\account-cloud.json "$tgx\account.json" -Force -ErrorAction SilentlyContinue
+  $v0 = cab-count 'vice' '.'
+  $t = run-signin $vdir 'list' 'profiles from the account|profiles:' 40 $true
+  if ($t -match 'profiles from the account: 1 xray' -and (cab-count 'vice' '.') -eq $v0) { ok 'vice over cloud: the CloudVPN session stays, the Vice cabinet was not asked' } else { bad 'vice over cloud: the CloudVPN session' }
+  $t = run-signin $vdir 'logout' 'account: signed out' 40 $true
+  if ($t -match 'account: signed out' -and -not (Test-Path "$tgx\account.json") -and -not (Test-Path "$tgx\profiles.json")) { ok 'sign-out leaves no token and no servers' } else { bad 'sign-out left files' }
+  # a session saved by 0.1.0 (plain text) keeps working and becomes protected
+  $tok = (Invoke-RestMethod http://127.0.0.1:8081/issue -Method Post -Body '{}').refresh_token
+  "{`"refresh`":`"$tok`",`"name`":`"CI Anna`"}" | Out-File "$tgx\account.json" -Encoding ascii
+  $t = run-signin $vdir 'list' 'profiles from the account|profiles:' 40 $true
+  $f = Get-Content "$tgx\account.json" -Raw -ErrorAction SilentlyContinue
+  if ($t -match 'profiles from the account: 1 xray' -and $f -match 'refresh_protected' -and $f -notmatch '"refresh":|r-[0-9a-f]{16}') { ok 'a session saved by 0.1.0 works and becomes protected' } else { bad 'a session saved by 0.1.0' }
+  # a file from another Windows account is not readable: just signed out
+  '{"account":"cloud","name":"X","refresh_protected":"AAECAwQFBgcICQ=="}' | Out-File "$tgx\account.json" -Encoding ascii
+  $t = run-signin $vdir 'list' 'can confirm' 40 $true
+  if ($t -match 'not readable on this Windows account' -and $t -notmatch 'profiles from the account') { ok 'an unreadable session is just a sign-out' } else { bad 'an unreadable session' }
+  check-signin $vdir 'vice' 'vice'
+  check-signin $vdir 'vice' 'cloud'
+  foreach ($x in 'cloud','vice') {
+    if ((cab-count $x ' 401|refused') -eq 0) { ok "no token and no code of the other account ever reached the $x cabinet" } else { bad "$x cabinet: $(cab-count $x ' 401|refused') foreign tokens or codes" }
+  }
   Start-Process "$vdir\uninstall.exe" -ArgumentList '/S' -Wait
   Start-Sleep 3
   if (-not (Test-Path "$vdir\CloudTalk.exe")) { ok 'uninstall /S removed the program' } else { bad 'uninstall left the program' }

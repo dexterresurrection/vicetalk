@@ -4,6 +4,7 @@ Licensed under GNU GPL v3 with the OpenSSL exception, like Telegram Desktop.
 */
 #include "tgx/tgx.h"
 
+#include "tgx/tgx_protect.h"
 #include "tgx/tgx_signin.h"
 
 #include "base/call_delayed.h"
@@ -49,6 +50,8 @@ Licensed under GNU GPL v3 with the OpenSSL exception, like Telegram Desktop.
 
 #include <rpl/variable.h>
 
+#include <optional>
+
 namespace Tgx {
 namespace {
 
@@ -79,11 +82,6 @@ QString StateDir() {
 	const auto dir = cWorkingDir() + QString::fromLatin1("tdata/tgx/");
 	QDir().mkpath(dir);
 	return dir;
-}
-
-// Sessions and bypass servers of the two accounts are kept apart: after switching the line the other account's are not used.
-QString LineFile(const char *name) {
-	return StateDir() + QString::fromLatin1(name) + (IsVice() ? u"-vice.json"_q : u".json"_q);
 }
 
 QJsonObject ReadJson(const QString &path) {
@@ -446,7 +444,7 @@ bool Bypass::hasServers() const {
 }
 
 QJsonObject Bypass::profiles() const {
-	const auto cached = ReadJson(LineFile("profiles"));
+	const auto cached = ReadJson(StateDir() + QString::fromLatin1("profiles.json"));
 	if (!cached.value(u"xray"_q).toArray().isEmpty()) {
 		return cached;
 	}
@@ -626,29 +624,45 @@ void Bypass::updateStatus() {
 
 constexpr auto kTestApiId = 17349; // Telegram Desktop's public development key: CI builds only
 
-// The account of our line: CloudVPN (cabinet.zjd.uk) or Vice VPN (vice.zjd.uk).
-QString AccountOrigin() {
-	return QString::fromLatin1(IsVice() ? kAccountVice : kAccountCloud);
+// The accounts the bypass can come from: CloudVPN (cabinet.zjd.uk) or, in the Vice line, a choice of Vice VPN (vice.zjd.uk)
+// and CloudVPN. A token goes only to the addresses of its own account.
+enum class Service {
+	Cloud,
+	Vice,
+};
+
+std::vector<Service> Services() {
+	return IsVice()
+		? std::vector<Service>{ Service::Vice, Service::Cloud }
+		: std::vector<Service>{ Service::Cloud };
 }
 
-QString ServiceName() {
-	return IsVice() ? u"Vice VPN"_q : u"CloudVPN"_q;
+QString ServiceId(Service service) {
+	return (service == Service::Vice) ? u"vice"_q : u"cloud"_q;
 }
 
-// Addresses of that account's cabinet (the mirror is reachable through the Russian relay).
-const QStringList &Origins() {
-	static const auto result = [] {
-		const auto test = GetBrand().json.value(u"test_origin"_q).toString();
-		if (!test.isEmpty() && GetBrand().apiId == kTestApiId) {
-			return QStringList{ test };
-		}
-		return IsVice()
-			? QStringList{ QString::fromLatin1(kAccountVice) }
-			: QStringList{ QString::fromLatin1(kAccountCloud), QString::fromLatin1(kAccountCloudMirror) };
-	}();
-	return result;
+QString ServiceName(Service service) {
+	return (service == Service::Vice) ? u"Vice VPN"_q : u"CloudVPN"_q;
 }
 
+QString ServiceOrigin(Service service) {
+	return QString::fromLatin1((service == Service::Vice) ? kAccountVice : kAccountCloud);
+}
+
+// The mirror of CloudVPN is reachable through the Russian relay.
+QStringList Origins(Service service) {
+	const auto key = (service == Service::Vice) ? u"test_origin_vice"_q : u"test_origin"_q;
+	const auto test = GetBrand().json.value(key).toString();
+	if (!test.isEmpty() && GetBrand().apiId == kTestApiId) {
+		return { test };
+	}
+	return (service == Service::Vice)
+		? QStringList{ QString::fromLatin1(kAccountVice) }
+		: QStringList{ QString::fromLatin1(kAccountCloud), QString::fromLatin1(kAccountCloudMirror) };
+}
+
+// One session at a time, its account is written next to it. The account changes only through a sign-out, which leaves
+// nothing of the former one: no token, no servers.
 class Account final : public QObject {
 public:
 	static Account &Instance() {
@@ -658,16 +672,27 @@ public:
 	bool loggedIn() const {
 		return !_refresh.isEmpty();
 	}
-	QString name() const {
-		return _name;
+	Service service() const {
+		return _service;
 	}
 	rpl::producer<QString> statusValue() const {
 		return _status.value();
 	}
 	void load() {
-		const auto o = ReadJson(LineFile("account"));
-		_refresh = o.value(u"refresh"_q).toString();
+		const auto o = ReadJson(path());
+		const auto box = QByteArray::fromBase64(o.value(u"refresh_protected"_q).toString().toLatin1());
+		const auto plain = o.value(u"refresh"_q).toString(); // version 0.1.0 and Linux
+		_refresh = box.isEmpty() ? plain : QString::fromUtf8(Unprotect(box));
+		_service = (o.value(u"account"_q).toString() == u"vice"_q) ? Service::Vice : Service::Cloud;
 		_name = o.value(u"name"_q).toString();
+		if (!box.isEmpty() && _refresh.isEmpty()) {
+			LOG(("Tgx: account: the saved session is not readable on this Windows account"));
+		}
+#ifdef Q_OS_WIN
+		if (!plain.isEmpty()) {
+			save(); // protected from now on
+		}
+#endif // Q_OS_WIN
 		updateStatus();
 		_timer.setCallback([=] { fetchProfile(nullptr); });
 		_timer.callEach(6 * 3600 * 1000);
@@ -676,16 +701,13 @@ public:
 		}
 	}
 	void logout() {
-		_refresh = _access = _name = QString();
-		QFile::remove(LineFile("account"));
-		QFile::remove(LineFile("profiles"));
-		Bypass::Instance().profilesUpdated();
-		updateStatus();
+		++_run;
+		forget();
 	}
 	// no callbacks after cancelLogin()
-	void startLogin(Fn<void(QString code, QString url)> onCode, Fn<void(bool ok, QString error)> onDone) {
+	void startLogin(Service service, Fn<void(QString code, QString url)> onCode, Fn<void(bool ok, QString error)> onDone) {
 		const auto run = ++_run;
-		request(u"POST"_q, u"/cabinet/auth/device/request"_q, QByteArray("{}"), QString(), [=](int code, QByteArray body) {
+		request(service, u"POST"_q, u"/cabinet/auth/device/request"_q, QByteArray("{}"), QString(), [=](int code, QByteArray body) {
 			if (_run != run) {
 				return;
 			}
@@ -695,22 +717,29 @@ public:
 				return;
 			}
 			onCode(d.value(u"user_code"_q).toString(), d.value(u"verification_url"_q).toString());
-			poll(run, d.value(u"token"_q).toString(), crl::now() + d.value(u"expires_in"_q).toInt(600) * crl::time(1000), onDone);
+			poll(run, service, d.value(u"token"_q).toString(), crl::now() + d.value(u"expires_in"_q).toInt(600) * crl::time(1000), onDone);
 		});
 	}
 	void cancelLogin() {
 		++_run;
 	}
 	void fetchProfile(Fn<void(QString error)> done) {
+		const auto gen = _gen;
+		const auto service = _service;
 		withAccess([=](QString access) {
-			if (access.isEmpty()) {
-				if (done) done(T("Войдите в аккаунт ", "Sign in to ") + ServiceName());
+			if (gen != _gen) {
+				return; // signed out or another account meanwhile
+			} else if (access.isEmpty()) {
+				if (done) done(T("Войдите в аккаунт ", "Sign in to ") + ServiceName(service));
 				return;
 			}
-			request(u"GET"_q, u"/cabinet/app/talk-profile"_q, QByteArray(), access, [=](int code, QByteArray body) {
+			request(service, u"GET"_q, u"/cabinet/app/talk-profile"_q, QByteArray(), access, [=](int code, QByteArray body) {
+				if (gen != _gen) {
+					return; // these servers are not used
+				}
 				auto error = QString();
 				if (code == 200 && QJsonDocument::fromJson(body).object().contains(u"xray"_q)) {
-					auto f = QFile(LineFile("profiles"));
+					auto f = QFile(StateDir() + u"profiles.json"_q);
 					if (f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
 						f.write(body);
 						f.close();
@@ -720,9 +749,9 @@ public:
 				} else {
 					const auto e = QJsonDocument::fromJson(body).object().value(u"error"_q).toString();
 					error = (e == u"no_device"_q)
-						? T("Сначала подключитесь к VPN на любом устройстве — обход берёт серверы вашей подписки ", "Connect the VPN on any device first: ") + ServiceName()
+						? T("Сначала подключитесь к VPN на любом устройстве — обход берёт серверы вашей подписки ", "Connect the VPN on any device first: ") + ServiceName(service)
 						: (e == u"subscription_inactive"_q || e == u"no_subscription"_q)
-						? T("Подписка не активна — обход входит в подписку ", "The subscription is not active: ") + ServiceName()
+						? T("Подписка не активна — обход входит в подписку ", "The subscription is not active: ") + ServiceName(service)
 						: T("Кабинет ответил ", "The cabinet answered ") + QString::number(code);
 					LOG(("Tgx: profiles: %1").arg(error));
 				}
@@ -735,9 +764,31 @@ public:
 private:
 	Account() = default;
 
+	static QString path() {
+		return StateDir() + u"account.json"_q;
+	}
+	void forget() {
+		++_gen;
+		_refresh = _access = _name = QString();
+		QFile::remove(path());
+		QFile::remove(StateDir() + u"profiles.json"_q);
+		Bypass::Instance().profilesUpdated();
+		updateStatus();
+	}
 	void save() {
-		WriteJson(LineFile("account"), QJsonObject{ { u"refresh"_q, _refresh }, { u"name"_q, _name } });
-		QFile::setPermissions(LineFile("account"), QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+		auto o = QJsonObject{ { u"account"_q, ServiceId(_service) }, { u"name"_q, _name } };
+#ifdef Q_OS_WIN
+		const auto box = Protect(_refresh.toUtf8());
+		if (box.isEmpty()) {
+			LOG(("Tgx: account: the session could not be protected, it is kept until the program is closed"));
+		} else {
+			o.insert(u"refresh_protected"_q, QString::fromLatin1(box.toBase64()));
+		}
+#else // Q_OS_WIN
+		o.insert(u"refresh"_q, _refresh);
+#endif // Q_OS_WIN
+		WriteJson(path(), o);
+		QFile::setPermissions(path(), QFileDevice::ReadOwner | QFileDevice::WriteOwner);
 	}
 	void apply(const QJsonObject &a) {
 		if (!a.value(u"refresh_token"_q).toString().isEmpty()) {
@@ -760,22 +811,23 @@ private:
 			then(QString());
 			return;
 		}
+		const auto gen = _gen;
 		const auto body = QJsonDocument(QJsonObject{ { u"refresh_token"_q, _refresh }, { u"rotate"_q, true } }).toJson(QJsonDocument::Compact);
-		request(u"POST"_q, u"/cabinet/auth/refresh"_q, body, QString(), [=](int code, QByteArray answer) {
-			if (code == 200) {
+		request(_service, u"POST"_q, u"/cabinet/auth/refresh"_q, body, QString(), [=](int code, QByteArray answer) {
+			if (gen != _gen) {
+				return; // signed out or another account meanwhile: nothing of it is kept
+			} else if (code == 200) {
 				apply(QJsonDocument::fromJson(answer).object());
 				then(_access);
 			} else {
-				if (code == 401) {
-					_refresh = QString();
-					save();
-					updateStatus();
+				if (code == 401) { // signed out in the cabinet; no connection or its fault is not a sign-out
+					forget();
 				}
 				then(QString());
 			}
 		});
 	}
-	void poll(int run, QString token, crl::time until, Fn<void(bool, QString)> onDone) {
+	void poll(int run, Service service, QString token, crl::time until, Fn<void(bool, QString)> onDone) {
 		if (_run != run) {
 			return;
 		} else if (crl::now() > until) {
@@ -787,27 +839,33 @@ private:
 				return;
 			}
 			const auto body = QJsonDocument(QJsonObject{ { u"token"_q, token } }).toJson(QJsonDocument::Compact);
-			request(u"POST"_q, u"/cabinet/auth/deeplink/poll"_q, body, QString(), [=](int code, QByteArray answer) {
+			request(service, u"POST"_q, u"/cabinet/auth/deeplink/poll"_q, body, QString(), [=](int code, QByteArray answer) {
 				if (_run != run) {
 					return; // cancelled meanwhile: the new session is not kept
 				} else if (code == 200) {
+					++_gen;
+					_refresh = _access = _name = QString();
+					_service = service;
 					apply(QJsonDocument::fromJson(answer).object());
-					LOG(("Tgx: sign-in: done"));
+					LOG(("Tgx: sign-in: done (%1)").arg(ServiceId(service)));
 					updateStatus();
 					fetchProfile([=](QString error) { onDone(true, error); });
 				} else if (code == 410) {
 					onDone(false, T("Код устарел, попробуйте ещё раз", "The code expired, try again"));
 				} else {
-					poll(run, token, until, onDone);
+					poll(run, service, token, until, onDone);
 				}
 			});
 		});
 	}
-	void request(QString method, QString path, QByteArray body, QString bearer, Fn<void(int, QByteArray)> done, int origin = 0) {
-		auto req = QNetworkRequest(QUrl(Origins()[origin] + u"/api"_q + path));
+	void request(Service service, QString method, QString path, QByteArray body, QString bearer, Fn<void(int, QByteArray)> done, int origin = 0) {
+		const auto origins = Origins(service);
+		auto req = QNetworkRequest(QUrl(origins[origin] + u"/api"_q + path));
 		req.setHeader(QNetworkRequest::ContentTypeHeader, u"application/json"_q);
 		req.setRawHeader("User-Agent", (GetBrand().name + u" Windows"_q).toUtf8());
 		req.setRawHeader("x-device-os", "Windows");
+		// a token never follows a redirect to another address
+		req.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::ManualRedirectPolicy);
 		if (!bearer.isEmpty()) {
 			req.setRawHeader("Authorization", "Bearer " + bearer.toUtf8());
 		}
@@ -816,8 +874,8 @@ private:
 		QObject::connect(reply, &QNetworkReply::finished, this, [=] {
 			reply->deleteLater();
 			const auto code = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
-			if ((code == 0 || code >= 500) && origin + 1 < Origins().size()) {
-				request(method, path, body, bearer, done, origin + 1);
+			if ((code == 0 || code >= 500) && origin + 1 < origins.size()) {
+				request(service, method, path, body, bearer, done, origin + 1);
 				return;
 			}
 			done(code, reply->readAll());
@@ -825,14 +883,16 @@ private:
 	}
 	void updateStatus() {
 		_status = loggedIn()
-			? (T("вход выполнен", "signed in") + (_name.isEmpty() ? QString() : (u" · "_q + _name)))
+			? (ServiceName(_service) + u" · "_q + (_name.isEmpty() ? T("вход выполнен", "signed in") : _name))
 			: T("не выполнен — обход входит в подписку", "not signed in — the bypass is part of the subscription");
 	}
 
 	QNetworkAccessManager _net;
+	Service _service = Service::Cloud;
 	QString _refresh, _access, _name;
 	crl::time _accessUntil = 0;
 	int _run = 0;
+	int _gen = 0; // grows with every sign-in and sign-out
 	base::Timer _timer;
 	rpl::variable<QString> _status;
 
@@ -1149,7 +1209,12 @@ bool BypassActive() {
 }
 
 QString AccountTitle() {
-	return T("Аккаунт ", "Account ") + ServiceName();
+	const auto &account = Account::Instance();
+	return account.loggedIn()
+		? (T("Аккаунт ", "Account ") + ServiceName(account.service()))
+		: IsVice()
+		? T("Аккаунт Vice VPN или Cloud VPN", "Vice VPN or Cloud VPN account")
+		: T("Аккаунт CloudVPN", "CloudVPN account");
 }
 
 rpl::producer<QString> AccountStatusValue() {
@@ -1169,10 +1234,10 @@ void Inform(const QString &text) {
 }
 
 // the code is confirmed in the cabinet
-void SignInByCode() {
+void SignInByCode(Service service) {
 	const auto url = std::make_shared<QString>();
 	const auto box = std::make_shared<base::weak_qptr<Ui::GenericBox>>();
-	Account::Instance().startLogin([=](QString code, QString verification) {
+	Account::Instance().startLogin(service, [=](QString code, QString verification) {
 		*url = verification;
 		File::OpenUrl(verification);
 		if (const auto w = ActiveWindow()) {
@@ -1184,7 +1249,7 @@ void SignInByCode() {
 				.cancelled = [=](Fn<void()> close) { Account::Instance().cancelLogin(); close(); },
 				.confirmText = T("Открыть кабинет", "Open the cabinet"),
 				.cancelText = T("Отмена", "Cancel"),
-				.title = AccountTitle(),
+				.title = T("Аккаунт ", "Account ") + ServiceName(service),
 			}));
 		}
 	}, [=](bool ok, QString error) {
@@ -1196,7 +1261,7 @@ void SignInByCode() {
 }
 
 // the code is confirmed by another program of ours: it asks the person
-void SignInThrough(SignInDonor donor) {
+void SignInThrough(Service service, SignInDonor donor) {
 	const auto box = std::make_shared<base::weak_qptr<Ui::GenericBox>>();
 	const auto over = std::make_shared<bool>(false);
 	const auto hide = [=] {
@@ -1218,12 +1283,12 @@ void SignInThrough(SignInDonor donor) {
 			.confirmed = cancel,
 			.cancelled = cancel,
 			.confirmText = T("Отмена", "Cancel"),
-			.title = AccountTitle(),
+			.title = T("Аккаунт ", "Account ") + ServiceName(service),
 			.inform = true,
 		}));
 	}
-	const auto origin = AccountOrigin();
-	Account::Instance().startLogin([=](QString code, QString) {
+	const auto origin = ServiceOrigin(service);
+	Account::Instance().startLogin(service, [=](QString code, QString) {
 		crl::async([=] {
 			const auto answer = SignInApprove(donor.id, code, origin);
 			crl::on_main([=] {
@@ -1241,29 +1306,58 @@ void SignInThrough(SignInDonor donor) {
 	});
 }
 
-void ChooseSignIn(std::vector<SignInDonor> donors) {
+struct SignInOption {
+	Service service = Service::Cloud;
+	SignInDonor donor; // without an id — by the code
+};
+
+// Never on the main thread: asks the running programs.
+std::vector<SignInOption> SignInOptions(const std::vector<Service> &services) {
+	auto result = std::vector<SignInOption>();
+	for (const auto service : services) {
+		for (const auto &donor : SignInDonors(ServiceOrigin(service))) {
+			result.push_back({ service, donor });
+		}
+	}
+	for (const auto service : services) {
+		result.push_back({ service, {} });
+	}
+	return result;
+}
+
+void SignInWith(const SignInOption &option) {
+	if (option.donor.id.isEmpty()) {
+		SignInByCode(option.service);
+	} else {
+		SignInThrough(option.service, option.donor);
+	}
+}
+
+void ChooseSignIn(std::vector<SignInOption> list) {
 	const auto window = ActiveWindow();
-	if (donors.empty() || !window) {
-		SignInByCode();
+	if (list.size() < 2 || !window) {
+		SignInWith(list.front());
 		return;
 	}
 	auto options = std::vector<QString>();
-	for (const auto &donor : donors) {
-		options.push_back(donor.name.isEmpty()
-			? (T("Войти через «", "Sign in through “") + donor.title + T("»", "”"))
-			: (T("Продолжить как ", "Continue as ") + donor.name + T(" — через «", " — through “") + donor.title + T("»", "”")));
+	for (const auto &option : list) {
+		const auto &donor = option.donor;
+		const auto service = ServiceName(option.service);
+		options.push_back(donor.id.isEmpty()
+			? (T("Войти по коду: ", "Sign in with a code: ") + service)
+			: ((donor.name.isEmpty()
+				? (T("Войти через «", "Sign in through “") + donor.title + T("»", "”"))
+				: (T("Продолжить как ", "Continue as ") + donor.name + T(" — через «", " — through “") + donor.title + T("»", "”")))
+				+ (IsVice() ? (u" · "_q + service) : QString())));
 	}
-	options.push_back(T("Войти по коду в кабинете", "Sign in with a code in the cabinet"));
 	window->show(Box([=](not_null<Ui::GenericBox*> box) {
 		SingleChoiceBox(box, {
 			.title = rpl::single(AccountTitle()),
 			.options = options,
 			.initialSelection = -1,
 			.callback = [=](int index) {
-				if (index >= 0 && index < int(donors.size())) {
-					SignInThrough(donors[index]);
-				} else {
-					SignInByCode();
+				if (index >= 0 && index < int(list.size())) {
+					SignInWith(list[index]);
 				}
 			},
 		});
@@ -1280,8 +1374,8 @@ void OfferSignIn() {
 	offered = true;
 	LOG(("Tgx: offer: sign in for the bypass"));
 	window->show(Ui::MakeConfirmBox({
-		.text = T("Telegram не отвечает: похоже, в этой сети он замедлен или заблокирован. Войдите в аккаунт — программа включит обход сама. Аккаунт: ",
-			"Telegram does not answer: it looks slow or blocked on this network. Sign in and the bypass turns on by itself. Account: ") + ServiceName(),
+		.text = T("Telegram не отвечает: похоже, в этой сети он замедлен или заблокирован. Войдите в аккаунт — программа включит обход сама. ",
+			"Telegram does not answer: it looks slow or blocked on this network. Sign in and the bypass turns on by itself. ") + AccountTitle() + '.',
 		.confirmed = [=](Fn<void()> close) { close(); AccountClicked(); },
 		.confirmText = T("Войти", "Sign in"),
 		.cancelText = T("Не сейчас", "Not now"),
@@ -1295,17 +1389,37 @@ void SignInForChecks() {
 	if (mode.isEmpty() || GetBrand().apiId != kTestApiId) {
 		return;
 	}
-	const auto origin = AccountOrigin();
+	const auto wanted = qEnvironmentVariable("TGX_CI_SERVICE");
+	const auto service = (wanted == u"cloud"_q)
+		? Service::Cloud
+		: (wanted == u"vice"_q)
+		? Service::Vice
+		: Services().front();
+	if (mode == u"logout"_q) {
+		Account::Instance().logout();
+		LOG(("Tgx: account: signed out"));
+		return;
+	}
 	crl::async([=] {
-		const auto donors = SignInDonors(origin);
+		const auto all = SignInOptions(Services());
 		crl::on_main([=] {
-			for (const auto &donor : donors) {
-				LOG(("Tgx: sign-in: donor %1 / %2 / %3").arg(donor.id, donor.title, donor.name));
+			auto through = std::optional<SignInOption>();
+			for (const auto &option : all) {
+				if (option.donor.id.isEmpty()) {
+					LOG(("Tgx: sign-in: code %1").arg(ServiceId(option.service)));
+				} else {
+					LOG(("Tgx: sign-in: donor %1 / %2 / %3 for %4").arg(option.donor.id, option.donor.title, option.donor.name, ServiceId(option.service)));
+					if (option.service == service && !through) {
+						through = option;
+					}
+				}
 			}
-			if (mode == u"through"_q && !donors.empty()) {
-				SignInThrough(donors.front());
+			if (Account::Instance().loggedIn()) {
+				return;
+			} else if (mode == u"through"_q && through) {
+				SignInWith(*through);
 			} else if (mode == u"code"_q) {
-				SignInByCode();
+				SignInByCode(service);
 			}
 		});
 	});
@@ -1326,10 +1440,9 @@ void AccountClicked() {
 		}
 		return;
 	}
-	const auto origin = AccountOrigin();
-	crl::async([=] {
-		auto donors = SignInDonors(origin);
-		crl::on_main([=] { ChooseSignIn(donors); });
+	crl::async([] {
+		auto options = SignInOptions(Services());
+		crl::on_main([=] { ChooseSignIn(options); });
 	});
 }
 

@@ -1,7 +1,10 @@
 # Shared sign-in (only the asking side), sourced by check-android.sh: test donors (signin/donor), a fake cabinet on the
 # runner (signin/fake_cabinet.py), builds signin-cloud.apk / signin-vice.apk that trust the donors' CI certificate.
 CAB=results/cabinet.log
-cab() { grep -c "$1" "$CAB" 2>/dev/null || true; }
+CABV=results/cabinet-vice.log
+touch "$CAB" "$CABV"
+cab() { grep -c "$1" "$CAB" || true; }
+cabv() { grep -c "$1" "$CABV" || true; }
 ui_has() { ui_dump | grep -qE "$1"; }
 wait_ui() {   # wait_ui <regex> <seconds>
   local end=$((SECONDS + $2))
@@ -65,20 +68,50 @@ signin_check() {
   shot signin-done
   adb logcat -d -v time > "$R/signin-logcat.txt" 2>/dev/null
   if grep -E " [IDWE]/tgx" "$R/signin-logcat.txt" | grep -qE "[0-9A-F]{4}-[0-9A-F]{4}|r-[0-9a-f]{16}|a-[0-9a-f]{16}"; then bad "log: a code or a token in the app's log"; else ok "log: no codes and no tokens"; fi
-  # ---- the Vice line over it: another service, the CloudVPN session and servers are not used
+  # ---- the Vice line over it: who is signed in stays signed in; the choice of account appears after the sign-out
   if adb install -r ci/signin-vice.apk >/dev/null 2>&1; then ok "sign-in: Vice test build over Cloud"; else bad "sign-in: Vice install"; return; fi
+  start_app
+  if wait_log "telegram state 3 \(bypass\)" 90 >/dev/null; then ok "Vice over Cloud: connected through the servers of the same account"; else bad "Vice over Cloud: not connected"; fi
+  open_bypass
+  if wait_ui "CloudVPN account: CI Anna" 20; then ok "Vice over Cloud: the CloudVPN session stays"; else bad "Vice over Cloud: the session is lost"; fi
+  if ui_has "vicevpnrobot|CloudVPNsafebot"; then bad "the choice of account is offered during a session"; else ok "no choice of account during a session"; fi
+  if [ "$(cabv .)" -eq 0 ]; then ok "Vice over Cloud: nothing went to the Vice cabinet"; else bad "Vice over Cloud: requests to the Vice cabinet"; fi
+  shot signin-vice-cloud
+  tap_text "sign out" 20
+  if wait_ui "Bypass servers: 0" 15; then ok "sign-out: the bypass servers are gone"; else bad "sign-out: servers stayed"; fi
+  if wait_ui "Vice VPN account .@vicevpnrobot." 10 && ui_has "Cloud VPN account .@CloudVPNsafebot."; then ok "Vice: the choice of two accounts"; else bad "Vice: no choice of account"; fi
+  shot signin-choice
+  adb logcat -c
+  tap_text "vice vpn account \(@vicevpnrobot\)" 15
+  if wait_log "account: vice" 10 >/dev/null && wait_log "sign-in: 1 app.s. can confirm" 20 >/dev/null && wait_ui "Continue as CI Vera — through “CI Wave”" 15; then ok "Vice VPN account: only the app with an account of vice.zjd.uk is offered"; else bad "Vice VPN account: $(adb logcat -d -s tgx:I | grep -E 'account|can confirm' | tail -2 | tr '\n' ' ')"; fi
+  if ui_has "CI VPN|CI Old|CI Fake"; then bad "Vice VPN account: apps of the other account offered"; else ok "Vice VPN account: apps of cabinet.zjd.uk — not offered"; fi
+  if ui_has "Telegram: connecting to proxy"; then bad "Vice: a stale local proxy is still set"; else ok "Vice: no stale local proxy"; fi
+  shot signin-vice
+  local c0; c0=$(cab .)
+  tap_text "continue as ci vera — through “ci wave”" 15
+  tap_text "allow" 25
+  if wait_log "sign-in: done .vice." 25 >/dev/null && wait_ui "Vice VPN account: CI Anna" 15; then ok "Vice VPN account: signed in through the other app"; else bad "Vice VPN account: not signed in"; fi
+  if wait_log "telegram state 3 \(bypass\)" 90 >/dev/null; then ok "Vice VPN account: connected through its bypass"; else bad "Vice VPN account: not connected"; fi
+  if [ "$(cab .)" = "$c0" ] && [ "$(cabv 'talk-profile ok')" -ge 1 ]; then ok "Vice VPN account: only the Vice cabinet was asked"; else bad "Vice VPN account: cabinets $c0 → $(cab .), Vice profile $(cabv 'talk-profile ok')"; fi
+  tap_text "sign out" 20; sleep 2
+  adb logcat -c
+  local v0; v0=$(cabv .)
+  tap_text "cloud vpn account \(@cloudvpnsafebot\)" 15
+  if wait_log "account: cloud" 10 >/dev/null && wait_log "sign-in: 2 app.s. can confirm" 20 >/dev/null; then ok "Cloud VPN account in the Vice line: its two apps are offered"; else bad "Cloud VPN account in the Vice line: donors"; fi
+  tap_text "continue as ci anna — through “ci vpn”" 15
+  tap_text "allow" 25
+  if wait_log "sign-in: done .cloud." 25 >/dev/null && wait_ui "CloudVPN account: CI Anna" 15; then ok "Cloud VPN account in the Vice line: signed in"; else bad "Cloud VPN account in the Vice line: not signed in"; fi
+  if wait_log "telegram state 3 \(bypass\)" 90 >/dev/null; then ok "Cloud VPN account in the Vice line: connected through its bypass"; else bad "Cloud VPN account in the Vice line: not connected"; fi
+  if [ "$(cabv .)" = "$v0" ]; then ok "Cloud VPN account in the Vice line: the Vice cabinet was not asked"; else bad "Cloud VPN account: requests to the Vice cabinet"; fi
+  if [ "$(cab ' 401\|refused')" -eq 0 ] && [ "$(cabv ' 401\|refused')" -eq 0 ]; then ok "no token and no code ever reached the cabinet of the other account"; else bad "wrong tokens: cloud $(cab ' 401\|refused'), vice $(cabv ' 401\|refused')"; fi
+  # ---- a new install of the Vice line
+  adb shell pm clear $PKG >/dev/null 2>&1
   start_app
   wait_log "offer: sign in for the bypass" 60 >/dev/null; tap_text "(not now|не сейчас)" 20
   open_bypass
-  if wait_log "sign-in: 1 app.s. can confirm" 20 >/dev/null && wait_ui "Continue as CI Vera — through “CI Wave”" 15; then ok "Vice: only the app with an account of vice.zjd.uk is offered"; else bad "Vice: $(adb logcat -d -s tgx:I | grep 'can confirm' | tail -1)"; fi
-  if ui_has "Vice VPN account: |CI VPN|CI Old"; then bad "Vice: the CloudVPN account is used"; else ok "Vice: not signed in by the CloudVPN session"; fi
-  if wait_ui "Bypass servers: 0" 10; then ok "Vice: the bypass servers of the other account are gone"; else bad "Vice: servers of the other account stayed"; fi
-  if ui_has "Telegram: connecting to proxy"; then bad "Vice: the other line's local proxy is still set"; else ok "Vice: no stale local proxy of the other line"; fi
-  shot signin-vice
-  tap_text "continue as ci vera — through “ci wave”" 15
-  tap_text "allow" 25
-  if wait_log "sign-in: done" 25 >/dev/null; then ok "Vice: signed in through the Vice app"; else bad "Vice: not signed in"; fi
+  if wait_log "sign-in: 1 app.s. can confirm" 20 >/dev/null && wait_ui "Sign in to Vice VPN with a code" 15; then ok "new install of the Vice line: Vice VPN by default"; else bad "new install of the Vice line: $(adb logcat -d -s tgx:I | grep 'can confirm' | tail -1)"; fi
+  shot signin-vice-new
   adb logcat -d -s donor:I | grep donor | tail -20 > "$R/signin-donors.txt"
-  cp "$CAB" "$R/cabinet.log" 2>/dev/null
+  cp "$CAB" "$R/cabinet.log" 2>/dev/null; cp "$CABV" "$R/cabinet-vice.log" 2>/dev/null
 }
 signin_check

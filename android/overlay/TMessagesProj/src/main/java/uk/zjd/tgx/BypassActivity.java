@@ -40,6 +40,7 @@ public class BypassActivity extends BaseFragment {
     private TextView account;
     private Button accountButton;
     private Button refreshButton;
+    private RadioGroup choice;
     private LinearLayout donorBox;
     private LinearLayout codeBox;
     private TextView codeText;
@@ -80,15 +81,39 @@ public class BypassActivity extends BaseFragment {
         scroll.addView(box);
 
         box.addView(text(context, Brand.t(
-                "Если Telegram в вашей сети замедлен или заблокирован, " + Brand.name + " сам пускает сообщения, файлы и звонки через серверы " + Account.title() + ". "
+                "Если Telegram в вашей сети замедлен или заблокирован, " + Brand.name + " сам пускает сообщения, файлы и звонки через серверы вашей подписки. "
                         + "Через обход идёт только трафик этого приложения — другие приложения и браузер не затрагиваются.",
-                "When Telegram is slow or blocked on your network, " + Brand.name + " routes messages, files and calls through " + Account.title() + " servers. "
+                "When Telegram is slow or blocked on your network, " + Brand.name + " routes messages, files and calls through the servers of your subscription. "
                         + "Only this app's traffic goes through the bypass."), 15, fg));
 
         // ---- CloudVPN account: the bypass is part of the subscription
         account = text(context, "", 15, fg);
         account.setPadding(0, AndroidUtilities.dp(14), 0, AndroidUtilities.dp(4));
         box.addView(account);
+        // the Vice line has two accounts to choose from; the choice is made before the sign-in
+        choice = new RadioGroup(context);
+        choice.setPadding(0, 0, 0, AndroidUtilities.dp(8));
+        final String[] accounts = Account.choices();
+        for (int i = 0; i < accounts.length; i++) {
+            final RadioButton rb = radio(context, fg, gray);
+            rb.setId(2000 + i);
+            rb.setText(Account.VICE.equals(accounts[i]) ? Brand.t("Аккаунт Vice VPN (бот @vicevpnrobot)", "Vice VPN account (@vicevpnrobot)")
+                    : Brand.t("Аккаунт Cloud VPN (бот @CloudVPNsafebot)", "Cloud VPN account (@CloudVPNsafebot)"));
+            choice.addView(rb);
+            if (accounts[i].equals(Account.current(context))) {
+                choice.check(2000 + i);
+            }
+        }
+        choice.setOnCheckedChangeListener((g, id) -> {
+            if (id < 2000 || !Account.choose(context, accounts[id - 2000])) {
+                return;
+            }
+            donorBox.removeAllViews();
+            codeBox.setVisibility(View.GONE);
+            update();
+            loadDonors();
+        });
+        box.addView(choice);
         donorBox = new LinearLayout(context);
         donorBox.setOrientation(LinearLayout.VERTICAL);
         donorBox.setVisibility(View.GONE);
@@ -137,14 +162,9 @@ public class BypassActivity extends BaseFragment {
                 Brand.t("Всегда через обход", "Always via bypass"),
                 Brand.t("Выключен — только напрямую", "Off — direct only")};
         for (int i = 0; i < titles.length; i++) {
-            final RadioButton rb = new RadioButton(context);
+            final RadioButton rb = radio(context, fg, gray);
             rb.setId(1000 + i);
             rb.setText(titles[i]);
-            rb.setTextColor(fg);
-            rb.setButtonTintList(new ColorStateList(new int[][]{{android.R.attr.state_checked}, {}},
-                    new int[]{Theme.getColor(Theme.key_featuredStickers_addButton), gray}));
-            rb.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 16);
-            rb.setPadding(AndroidUtilities.dp(6), AndroidUtilities.dp(8), 0, AndroidUtilities.dp(8));
             group.addView(rb);
         }
         group.check(1000 + Bypass.getMode());
@@ -219,6 +239,9 @@ public class BypassActivity extends BaseFragment {
 
     /** donor == null — the code is confirmed in the cabinet or in the bot; otherwise that app of ours confirms it. */
     private void startLogin(SharedSignIn.Donor donor) {
+        if (donor != null && !donor.origin.equals(Account.origin(getContext()))) {
+            return;   // offered for the account that is not chosen any more
+        }
         asking = donor;
         accountButton.setTag(Boolean.TRUE);
         donorBox.setVisibility(View.GONE);
@@ -235,8 +258,8 @@ public class BypassActivity extends BaseFragment {
                     return;
                 }
                 codeText.setText(Brand.t("Код для входа: ", "Sign-in code: ") + userCode + "\n"
-                        + Brand.t("Подтвердите его в кабинете " + Account.title() + " (или в боте, если Telegram уже работает). Жду подтверждения…",
-                        "Confirm it in the " + Account.title() + " cabinet (or in the bot if Telegram already works). Waiting…"));
+                        + Brand.t("Подтвердите его в кабинете " + Account.title(c) + " (или в боте, если Telegram уже работает). Жду подтверждения…",
+                        "Confirm it in the " + Account.title(c) + " cabinet (or in the bot if Telegram already works). Waiting…"));
                 codeButtons.setVisibility(View.VISIBLE);
                 codeBox.setVisibility(View.VISIBLE);
             }
@@ -307,10 +330,11 @@ public class BypassActivity extends BaseFragment {
             return;
         }
         new Thread(() -> {
+            final String account = Account.current(c);
             final List<SharedSignIn.Donor> list = SharedSignIn.donors(c.getApplicationContext());
             AndroidUtilities.runOnUIThread(() -> {
-                if (donorBox == null || getContext() == null) {
-                    return;
+                if (donorBox == null || getContext() == null || !account.equals(Account.current(c))) {
+                    return;   // another account was chosen meanwhile: its own list is on the way
                 }
                 donorBox.removeAllViews();
                 for (SharedSignIn.Donor d : list) {
@@ -340,6 +364,16 @@ public class BypassActivity extends BaseFragment {
         ThemeBind.textColor(t, Theme.key_windowBackgroundWhiteBlueText4);
         t.setOnClickListener(v -> intro.presentFragment(new BypassActivity()));
         parent.addView(t, LayoutHelper.createFrame(LayoutHelper.WRAP_CONTENT, 36, Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL, 0, 0, 0, 8));
+    }
+
+    private static RadioButton radio(Context c, int fg, int gray) {
+        final RadioButton rb = new RadioButton(c);
+        rb.setTextColor(fg);
+        rb.setButtonTintList(new ColorStateList(new int[][]{{android.R.attr.state_checked}, {}},
+                new int[]{Theme.getColor(Theme.key_featuredStickers_addButton), gray}));
+        rb.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 16);
+        rb.setPadding(AndroidUtilities.dp(6), AndroidUtilities.dp(8), 0, AndroidUtilities.dp(8));
+        return rb;
     }
 
     /** Buttons in the colours of the chosen theme (the system's grey ones are unreadable on a dark page). */
@@ -376,7 +410,8 @@ public class BypassActivity extends BaseFragment {
         }
         final boolean in = Account.loggedIn(getContext());
         final String who = Account.userName(getContext());
-        final String service = Account.title();
+        final String service = Account.title(getContext());
+        choice.setVisibility(Account.choices().length > 1 && !in && accountButton.getTag() == null ? View.VISIBLE : View.GONE);
         account.setText(in ? Brand.t("Аккаунт " + service + ": ", service + " account: ") + (who.isEmpty() ? Brand.t("вход выполнен", "signed in") : who)
                 : Brand.t("Обход входит в подписку " + service + ". Войдите в аккаунт — серверы обхода возьмутся из вашей подписки.",
                 "The bypass is part of the " + service + " subscription. Sign in — the bypass servers come from your subscription."));

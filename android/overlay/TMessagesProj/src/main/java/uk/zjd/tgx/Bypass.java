@@ -175,7 +175,7 @@ public final class Bypass {
         final String m = mode == MODE_ALWAYS ? Brand.t("всегда", "always") : mode == MODE_OFF ? Brand.t("выключен", "off") : Brand.t("авто", "auto");
         final String s = active ? Brand.t("сейчас через обход", "now via bypass") : Brand.t("сейчас напрямую", "now direct");
         if (ctx != null && profileCount() == 0 && !Account.loggedIn(ctx)) {
-            return Brand.t("Войдите в аккаунт " + Account.title() + " — обход входит в подписку", "Sign in to " + Account.title() + " — the bypass is part of the subscription");
+            return Brand.t("Войдите в аккаунт " + Account.title(ctx) + " — обход входит в подписку", "Sign in to " + Account.title(ctx) + " — the bypass is part of the subscription");
         }
         return Brand.t("Режим: ", "Mode: ") + m + " · " + s;
     }
@@ -237,6 +237,10 @@ public final class Bypass {
 
     private static boolean offered;
 
+    private static String names() {
+        return Brand.isVice() ? Brand.t("Vice VPN или Cloud VPN", "Vice VPN or Cloud VPN") : "CloudVPN";
+    }
+
     /** Telegram does not answer and there are no bypass servers yet: one offer per start, on any screen. */
     private static void offerLogin() {
         if (offered || ApplicationLoader.mainInterfacePaused || Account.loggedIn(ctx)) {
@@ -250,8 +254,8 @@ public final class Bypass {
         note("offer: sign in for the bypass");
         new AlertDialog.Builder(f.getParentActivity())
                 .setTitle(Brand.t("Telegram не отвечает", "Telegram does not answer"))
-                .setMessage(Brand.t("Похоже, в этой сети он замедлен или заблокирован. Войдите в аккаунт " + Account.title() + " — " + Brand.name + " включит обход сам.",
-                        "It looks slow or blocked on this network. Sign in to " + Account.title() + " and " + Brand.name + " will turn the bypass on by itself."))
+                .setMessage(Brand.t("Похоже, в этой сети он замедлен или заблокирован. Войдите в аккаунт " + names() + " — " + Brand.name + " включит обход сам.",
+                        "It looks slow or blocked on this network. Sign in to " + names() + " and " + Brand.name + " will turn the bypass on by itself."))
                 .setPositiveButton(Brand.t("Войти", "Sign in"), (d, w) -> f.presentFragment(new BypassActivity()))
                 .setNegativeButton(Brand.t("Не сейчас", "Not now"), null)
                 .show();
