@@ -134,6 +134,7 @@ function run-signin($dir, $mode, $until, $seconds, $keep = $false) {
   if (-not $keep) { Remove-Item "$tgx\account*.json", "$tgx\profiles*.json", "$tgx\bypass.json" -ErrorAction SilentlyContinue }
   $log = "$env:APPDATA\Cloud Talk\log.txt"
   Remove-Item $log -ErrorAction SilentlyContinue
+  $before = @(Invoke-RestMethod http://127.0.0.1:8081/pending -ErrorAction SilentlyContinue)   # codes of refused sign-ins stay there
   $env:TGX_CI_SIGNIN = $mode
   $null = start-talk "$dir\CloudTalk.exe"
   $env:TGX_CI_SIGNIN = ''
@@ -142,7 +143,7 @@ function run-signin($dir, $mode, $until, $seconds, $keep = $false) {
     Start-Sleep 2
     $t = Get-Content $log -Raw -ErrorAction SilentlyContinue
     if ($mode -eq 'code' -and -not $approved) {   # «confirmed in the cabinet»
-      $pending = @(Invoke-RestMethod http://127.0.0.1:8081/pending -ErrorAction SilentlyContinue)
+      $pending = @(@(Invoke-RestMethod http://127.0.0.1:8081/pending -ErrorAction SilentlyContinue) | Where-Object { $_ -and ($before -notcontains $_) })
       if ($pending.Count -gt 0 -and $pending[0]) {
         Invoke-RestMethod http://127.0.0.1:8081/api/cabinet/auth/device/approve -Method Post -Headers @{ Authorization = 'Bearer donor' } -Body (@{ user_code = "$($pending[-1])" } | ConvertTo-Json) | Out-Null
         $approved = $true
