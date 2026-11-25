@@ -8,6 +8,7 @@ on:
       setup_sha: {required: true}
       vice_url: {required: false, default: ""}
       vice_sha: {required: false, default: ""}
+      workdir: {required: false, default: ""}   # 1 — pass -workdir (builds that keep data next to the exe for an administrator)
 jobs:
   check:
     runs-on: windows-latest
@@ -21,9 +22,11 @@ jobs:
           SETUP_SHA: ${{ inputs.setup_sha }}
           VICE_URL: ${{ inputs.vice_url }}
           VICE_SHA: ${{ inputs.vice_sha }}
+          WORKDIR: ${{ inputs.workdir }}
         run: |
           cd desktop/ci/wincheck
           echo "$SETUP_URL" > setup-url.txt; echo "$SETUP_SHA" > setup-sha.txt
+          if [ -n "$WORKDIR" ]; then echo 1 > force-workdir.txt; fi
           if [ -n "$VICE_URL" ]; then echo "$VICE_URL" > vice-url.txt; echo "$VICE_SHA" > vice-sha.txt; fi
       - name: check
         shell: pwsh

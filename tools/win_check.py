@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Check installers on a Windows runner (workflow tgx-win-check.yml of the vicetalk repo):
-    tools/win_check.py <CloudTalk-Setup.exe> [ViceTalk-Setup.exe] <out dir>
+    tools/win_check.py [--workdir] <CloudTalk-Setup.exe> [ViceTalk-Setup.exe] <out dir>
 Installers go to our bucket under a random ci/ key only for the run (deleted afterwards in any case)."""
 import hashlib
 import os
@@ -15,12 +15,13 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 
 def main():
-    files, out = sys.argv[1:-1], sys.argv[-1]
+    argv = [a for a in sys.argv[1:] if a != '--workdir']
+    files, out = argv[:-1], argv[-1]
     if not files:
         sys.exit(__doc__)
     tag = secrets.token_hex(8)
     cli = pr.s3()
-    keys, args = [], []
+    keys, args = [], (['--input', 'workdir=1'] if '--workdir' in sys.argv else [])
     try:
         from boto3.s3.transfer import TransferConfig
         for i, f in enumerate(files):

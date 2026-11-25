@@ -15,6 +15,8 @@ Licensed under GNU GPL v3 with the OpenSSL exception, like Telegram Desktop.
 #include "mtproto/mtproto_proxy_data.h"
 #include "ui/boxes/confirm_box.h"
 #include "ui/boxes/single_choice_box.h"
+#include "ui/style/style_core.h"
+#include "window/main_window.h"
 #include "window/window_controller.h"
 #include "settings.h"
 
@@ -31,6 +33,8 @@ Licensed under GNU GPL v3 with the OpenSSL exception, like Telegram Desktop.
 #include <QtCore/QRegularExpression>
 #include <QtCore/QStandardPaths>
 #include <QtCore/QUrl>
+#include <QtGui/QPainter>
+#include <QtGui/QPixmap>
 #include <QtNetwork/QHostAddress>
 #include <QtNetwork/QHostInfo>
 #include <QtNetwork/QNetworkAccessManager>
@@ -1058,6 +1062,22 @@ QString IntroAbout() {
 	return T(
 		"Неофициальный клиент Telegram от CloudVPN.\nСо встроенным обходом блокировок.",
 		"Unofficial Telegram client by CloudVPN.\nWith a built-in bypass of blocks.");
+}
+
+void PaintIntroLogo(QPainter &p, int left, int top, int width) {
+	const auto size = style::ConvertScale(112);
+	const auto ratio = style::DevicePixelRatio();
+	static auto cached = QPixmap();
+	if (cached.width() != size * ratio) {
+		auto image = Window::LogoNoMargin().scaled(
+			size * ratio,
+			size * ratio,
+			Qt::IgnoreAspectRatio,
+			Qt::SmoothTransformation);
+		image.setDevicePixelRatio(ratio);
+		cached = QPixmap::fromImage(std::move(image));
+	}
+	p.drawPixmap(left + (width - size) / 2, top, cached);
 }
 
 int ApiIdValue() {

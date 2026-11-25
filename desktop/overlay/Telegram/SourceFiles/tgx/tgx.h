@@ -12,6 +12,8 @@ Licensed under GNU GPL v3 with the OpenSSL exception, like Telegram Desktop.
 
 #include <rpl/producer.h>
 
+class QPainter;
+
 namespace Tgx {
 
 // brand.json + talk.json next to the executable (written by our installer; never in the public repository):
@@ -32,6 +34,7 @@ struct Brand {
 [[nodiscard]] bool Ru();
 [[nodiscard]] QString T(const char *ru, const char *en);
 [[nodiscard]] QString IntroAbout();
+void PaintIntroLogo(QPainter &p, int left, int top, int width); // the icon of the line on the first screen
 
 // Runtime replacements for the compile-time constants of config.h / version.h.
 int ApiIdValue();

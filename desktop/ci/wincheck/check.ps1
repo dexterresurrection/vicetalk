@@ -49,6 +49,11 @@ $outb = "{`"protocol`":`"vless`",`"settings`":{`"vnext`":[{`"address`":`"127.0.0
 $talkcfg = "{`"api_id`":17349,`"api_hash`":`"344583e45741c457fe1862106095a5eb`",`"version`":`"0.1.0`",`"bypass`":{`"mode`":`"auto`",`"xray`":[$outb],`"mtproto`":[]}}"
 $tgNets = '149.154.160.0/20','91.108.4.0/22','91.108.8.0/22','91.108.12.0/22','91.108.16.0/22','91.108.20.0/22','91.108.56.0/22','95.161.64.0/20','185.76.151.0/24','2001:67c:4e8::/48','2001:b28:f23d::/48','2001:b28:f23f::/48'
 
+# an older exe keeps its data next to itself for an administrator: the check can send it to AppData explicitly
+function start-talk($exe) {
+  if (Test-Path "$PSScriptRoot\force-workdir.txt") { return (Start-Process $exe -ArgumentList '-workdir', "`"$env:APPDATA\Cloud Talk`"" -PassThru) }
+  return (Start-Process $exe -PassThru)
+}
 function run-line($dir, $line, $name) {
   $exe = "$dir\CloudTalk.exe"
   New-NetFirewallRule -DisplayName "talk-block-$line" -Direction Outbound -Program $exe -RemoteAddress $tgNets -Action Block | Out-Null
@@ -56,7 +61,8 @@ function run-line($dir, $line, $name) {
   $talkcfg | Out-File "$dir\talk.json" -Encoding ascii
   $data = "$env:APPDATA\Cloud Talk"
   Remove-Item "$data\log.txt", "$data\tdata\tgx\bypass.json" -ErrorAction SilentlyContinue   # direct first, nothing remembered
-  $p = Start-Process $exe -PassThru
+  New-Item -ItemType Directory -Force "$env:APPDATA\Cloud Talk" | Out-Null
+  $p = start-talk $exe
   $log = "$data\log.txt"
   $deadline = (Get-Date).AddSeconds(150)
   $seen = @{}
@@ -79,6 +85,7 @@ function run-line($dir, $line, $name) {
   if ($seen['xray up on']) { ok "${name}: xray core running" } else { bad "${name}: xray core did not start" }
   if ($seen['telegram state 2 (bypass)']) { ok "${name}: Telegram connected through the bypass" } else { bad "${name}: no connection through the bypass" }
   if (Get-Process xray -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "$dir*" }) { ok "${name}: xray.exe child alive" } else { bad "${name}: no xray.exe from $dir" }
+  if (Test-Path "$dir\tdata") { bad "${name}: data next to the program, not in AppData" } elseif (Test-Path "$data\tdata") { ok "${name}: data in AppData" } else { bad "${name}: no data folder" }
   $title = (Get-Process CloudTalk -ErrorAction SilentlyContinue | Select-Object -First 1).MainWindowTitle
   if ($title -like "*$name*") { ok "${name}: window title '$title'" } else { note "${name}: window title '$title'" }
   Stop-Process -Name CloudTalk -Force -ErrorAction SilentlyContinue
@@ -128,7 +135,7 @@ function run-signin($dir, $mode, $until, $seconds, $keep = $false) {
   $log = "$env:APPDATA\Cloud Talk\log.txt"
   Remove-Item $log -ErrorAction SilentlyContinue
   $env:TGX_CI_SIGNIN = $mode
-  $null = Start-Process "$dir\CloudTalk.exe" -PassThru
+  $null = start-talk "$dir\CloudTalk.exe"
   $env:TGX_CI_SIGNIN = ''
   $deadline = (Get-Date).AddSeconds($seconds); $t = ''; $approved = $false
   while ((Get-Date) -lt $deadline) {
@@ -216,7 +223,7 @@ if ($dir -and (Test-Path "$dir\CloudTalk.exe")) {
   ($old | ConvertTo-Json -Depth 20 -Compress) | Out-File "$dir\talk.json" -Encoding ascii
   Remove-Item "$env:APPDATA\Cloud Talk\log.txt" -ErrorAction SilentlyContinue
   $env:TGX_CI_AUTO_UPDATE = '1'
-  $oldp = Start-Process "$dir\CloudTalk.exe" -PassThru
+  $oldp = start-talk "$dir\CloudTalk.exe"
   $env:TGX_CI_AUTO_UPDATE = ''
   $deadline = (Get-Date).AddSeconds(240); $started = $false
   while ((Get-Date) -lt $deadline) {
