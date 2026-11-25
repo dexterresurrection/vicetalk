@@ -109,6 +109,15 @@ QString RandomHex(int bytes) {
 	return QString::fromLatin1(result.toHex());
 }
 
+// Our local proxy of this or an earlier run (the login is random, its look is ours: «tg» and 12 hex digits): it must be
+// recognised even when bypass.json was lost, otherwise a dead local port would pass for the person's own proxy.
+bool OurLocalProxy(const MTP::ProxyData &proxy) {
+	static const auto look = QRegularExpression(u"^tg[0-9a-f]{12}$"_q);
+	return proxy.type == MTP::ProxyData::Type::Socks5
+		&& proxy.host == kLocal
+		&& look.match(proxy.user).hasMatch();
+}
+
 bool PortOpen(int port) {
 	if (port <= 0) {
 		return false;
@@ -314,9 +323,7 @@ bool Bypass::ourProxyCurrent() const {
 	const auto &proxy = Core::App().settings().proxy();
 	const auto &selected = proxy.selected();
 	return proxy.isEnabled()
-		&& selected.type == MTP::ProxyData::Type::Socks5
-		&& selected.host == kLocal
-		&& selected.user == _user;
+		&& OurLocalProxy(selected);
 }
 
 bool Bypass::ourMtproto(const MTP::ProxyData &proxy) const {
@@ -422,10 +429,7 @@ void Bypass::useTelegramProxy(const MTP::ProxyData &value) {
 	// the local port changes between runs: drop our old local entries
 	auto &list = settings.list();
 	list.erase(ranges::remove_if(list, [&](const MTP::ProxyData &p) {
-		return p.type == MTP::ProxyData::Type::Socks5
-			&& p.host == kLocal
-			&& p.user == _user
-			&& p != value;
+		return OurLocalProxy(p) && (p != value);
 	}), end(list));
 	if (settings.indexInList(value) < 0) {
 		settings.insertToList(0, value);

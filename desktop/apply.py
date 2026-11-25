@@ -113,6 +113,14 @@ def main():
         f.replace(old, 'Tgx::GetBrand().name')
         head = f'#include "{rel[:-4]}.h"\n'
         f.replace(head, head + '\n#include "tgx/tgx.h"\n')
+        if rel == 'intro/intro_start.cpp':   # the sign-in to our account is reachable before the sign-in to Telegram
+            f.replace('	setDescriptionText(tr::lng_intro_about());\n', '''	setDescriptionText(tr::lng_intro_about());
+	const auto bypass = Ui::CreateChild<Ui::LinkButton>(this, Tgx::BypassTitle());
+	bypass->setClickedCallback([] { Tgx::AccountClicked(); });
+	sizeValue() | rpl::on_next([=](QSize size) {
+		bypass->moveToLeft((size.width() - bypass->width()) / 2, size.height() - 2 * bypass->height());
+	}, bypass->lifetime());
+''')
         if rel == 'boxes/about_box.cpp':
             f.replace('"https://github.com/telegramdesktop/tdesktop")),', '"https://github.com/dexterresurrection/vicetalk")),')
         if rel == 'window/window_main_menu.cpp':
